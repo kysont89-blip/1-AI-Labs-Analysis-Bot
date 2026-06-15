@@ -3,9 +3,15 @@ Report Builder for XOX Analysis Bot
 Combines all signals into structured analysis reports.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
+
+if TYPE_CHECKING:
+    # Imported only for type hints — keeps this module a pure consumer
+    # of NewsItem / EconomicEvent and avoids a runtime import cycle.
+    from news_fetcher import NewsItem
+    from economic_calendar import EconomicEvent
 
 
 class SignalStrength(Enum):
@@ -14,6 +20,34 @@ class SignalStrength(Enum):
     NEUTRAL = "NEUTRAL"
     SELL = "SELL"
     STRONG_SELL = "STRONG_SELL"
+
+
+# ── Module-level helpers (used by AnalysisReport._news_events_section) ──
+
+def _format_age(minutes: int) -> str:
+    """Compact 'Nm ago' / 'Nh ago' / 'Nd ago' string. Mirrors the
+    formatter in news_fetcher._format_age but is duplicated here to
+    keep report_builder self-contained (no import cycle).
+    """
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes}m ago"
+    if minutes < 60 * 24:
+        return f"{minutes // 60}h ago"
+    return f"{minutes // (60 * 24)}d ago"
+
+
+def _format_news_stars(stars: int) -> str:
+    """Render a 1-5 star rating as '★★★★★' style. 0 -> '' (no prefix).
+    Duplicates news_fetcher._format_stars / economic_calendar._format_stars
+    so the report builder can format ratings without depending on either.
+    """
+    if stars <= 0:
+        return ""
+    if stars > 5:
+        stars = 5
+    return "★" * stars + "☆" * (5 - stars)
 
 
 # ═══════════════════════════════════════════════
@@ -185,6 +219,22 @@ class AnalysisReport:
     # Risk
     risk_warning: Optional[str] = None
     news_impact: Optional[str] = None
+    # ↑ Repurposed (was a dead field). New semantics: short human-readable
+    # reason explaining why the signal was auto-overridden to NEUTRAL by a
+    # high-impact economic event. Set inside ReportBuilder.build() when
+    # event_blocked is provided and the event is 'high' impact. None when
+    # the signal was produced by the normal code/AI pipeline (i.e. nothing
+    # to surface to the user).
+    news_items: Optional[List["NewsItem"]] = None
+    # ↑ Top RSS headlines (already filtered to 3★+ by NewsFetcher). Used
+    # only in the Premium (Full) report. None = no news sub-block.
+    upcoming_events: Optional[List["EconomicEvent"]] = None
+    # ↑ Next 3 high-impact economic events for the symbol's currency.
+    # Used only in the Premium report. None = no events sub-block.
+    event_blocked: Optional[Dict] = None
+    # ↑ Raw dict returned by EconomicCalendar.check_signal_blocked().
+    # Kept on the report for audit / debugging — the user-facing reason
+    # lives in news_impact. None means no event in the buffer window.
 
     # Vision
     vision_analysis: Optional[Dict] = None
@@ -422,6 +472,13 @@ Key Observation: {self.vision_analysis.get('trend', 'N/A')}
         if self.fundamental_context:
             text += self._fundamental_section_obscured()
 
+        # News + Upcoming Events — premium only. Both sub-blocks are
+        # independently optional; the section returns "" if both are
+        # absent so we don't render an empty header.
+        news_events = self._news_events_section()
+        if news_events:
+            text += news_events
+
         return text
 
     def _fundamental_section(self) -> str:
@@ -537,6 +594,67 @@ Key Observation: {self.vision_analysis.get('trend', 'N/A')}
 ━━━━━━━━━━━━━━━━━━━━━━
 • {flow_text}
 """
+
+    # ── NEWS + EVENTS (premium only) ────────────────────────────────
+
+    def _news_events_section(self) -> str:
+        """Render compact news + upcoming-events block for the Premium report.
+
+        Layout:
+            📰 TOP HEADLINES (top 5, 3★+ enforced, impact-sorted)
+              ★★★★★ <title>
+                 <source> · <age>
+
+            📅 UPCOMING EVENTS (next 3 high-impact for the symbol)
+              ★★★★★ <name> — <date> <time> GMT · <currency>
+                 💡 <reason>
+
+        Both sub-blocks are independently optional. Returns "" if both
+        are absent so the caller can `if section: text += section` cleanly.
+        """
+        parts: List[str] = []
+
+        # ---- News (top 5, 3★+ defense-in-depth filter) ----
+        if self.news_items:
+            lines = ["📰 TOP HEADLINES", "━" * 22]
+            shown = 0
+            for it in self.news_items:
+                if shown >= 5:
+                    break
+                # NewsFetcher already filters to 3★+ in its default mode,
+                # but enforce here in case a future caller passes raw items.
+                if getattr(it, 'impact_stars', 0) < 3:
+                    continue
+                title = " ".join((it.title or "").split())  # collapse newlines
+                if len(title) > 110:
+                    title = title[:107].rstrip() + "..."
+                age = _format_age(getattr(it, 'age_minutes', 0) or 0)
+                stars = _format_news_stars(it.impact_stars)
+                lines.append(f"{stars} {title}")
+                lines.append(f"   {it.source} · {age}")
+                shown += 1
+            if shown > 0:
+                parts.append("\n".join(lines))
+
+        # ---- Upcoming events (next 3 high-impact) ----
+        if self.upcoming_events:
+            lines = ["📅 UPCOMING EVENTS", "━" * 22]
+            # Filter to high-impact only. Up to 3, in calendar order.
+            hi = [e for e in self.upcoming_events
+                  if getattr(e, 'impact', '') == 'high'][:3]
+            for e in hi:
+                stars = _format_news_stars(getattr(e, 'impact_stars', 0) or 0)
+                stars_str = f"{stars} " if stars else ""
+                lines.append(f"{stars_str}{e.name}")
+                lines.append(f"   {e.date} {e.time} GMT · {e.currency}")
+                if getattr(e, 'impact_reason', ''):
+                    lines.append(f"   💡 {e.impact_reason}")
+            if hi:
+                parts.append("\n".join(lines))
+
+        if not parts:
+            return ""
+        return "\n\n" + "\n\n".join(parts) + "\n"
 
     # ── GENERIC DESCRIPTION HELPERS (obscure exact values) ──
 
@@ -1019,7 +1137,10 @@ class ReportBuilder:
         order_flow: Optional[Dict] = None,
         divergence: Optional[List[Dict]] = None,
         tier: str = "free",
-        trading_style: str = "auto"
+        trading_style: str = "auto",
+        news_items: Optional[List] = None,
+        upcoming_events: Optional[List] = None,
+        event_blocked: Optional[Dict] = None,
     ) -> AnalysisReport:
         """Build complete report from all inputs."""
         import datetime
@@ -1112,6 +1233,30 @@ class ReportBuilder:
             trend_score, pattern_bias, confluence, contradictions, plan
         )
 
+        # Event-block override: a high-impact economic event inside the
+        # buffer window forces NEUTRAL regardless of the code/AI signal.
+        # Block = no trade, not weak trade — confluence and confidence are
+        # preserved so the report still shows what the technicals said.
+        # The reason is surfaced via the (repurposed) news_impact field
+        # and in the report's AUTO-BLOCKED callout in the bot.
+        news_impact_reason: Optional[str] = None
+        if event_blocked and event_blocked.get('blocked') \
+                and event_blocked.get('impact') == 'high':
+            overall = SignalStrength.NEUTRAL
+            ev_name = event_blocked.get('event', 'upcoming news')
+            mins_until = event_blocked.get('minutes_until', 0) or 0
+            if mins_until > 0:
+                news_impact_reason = (
+                    f"Auto-blocked: {ev_name} in {mins_until} min "
+                    f"(high-impact release within buffer window)"
+                )
+            else:
+                mins_after = event_blocked.get('minutes_after', 0) or 0
+                news_impact_reason = (
+                    f"Auto-blocked: {ev_name} released {mins_after} min ago "
+                    f"(high-impact release within buffer window)"
+                )
+
         # Risk warning if contradictions exist
         risk_warning = None
         if contradictions:
@@ -1154,6 +1299,10 @@ class ReportBuilder:
             signal_confidence=confluence / 100,
             confluence_score=confluence,
             risk_warning=risk_warning,
+            news_impact=news_impact_reason,
+            news_items=news_items,
+            upcoming_events=upcoming_events,
+            event_blocked=event_blocked,
             vision_analysis=vision,
             fundamental_context=fundamental,
             order_flow=order_flow
@@ -1228,3 +1377,122 @@ if __name__ == '__main__':
     print(report.to_telegram_text(tier="free"))
     print("\n=== PREMIUM REPORT ===")
     print(report.to_telegram_text(tier="premium"))
+
+    # ── Smoke checks for the news / events / event-block additions ──
+    print("\n=== SMOKE: event-block override ===")
+    blocked_report = builder.build(
+        'XAUUSD', 'H1', 2400.0, mock_indicators, mock_patterns,
+        event_blocked={
+            'blocked': True,
+            'event': 'FOMC Interest Rate Decision',
+            'minutes_until': 12,
+            'minutes_after': 0,
+            'impact': 'high',
+            'currency': 'USD',
+            'recommendation': 'AVOID',
+        },
+    )
+    assert blocked_report.overall_signal == SignalStrength.NEUTRAL, \
+        f"Expected NEUTRAL, got {blocked_report.overall_signal}"
+    assert blocked_report.news_impact and 'FOMC' in blocked_report.news_impact, \
+        f"Expected FOMC in news_impact, got {blocked_report.news_impact!r}"
+    assert '12 min' in blocked_report.news_impact, \
+        f"Expected '12 min' in reason, got {blocked_report.news_impact!r}"
+    print("  Event-block override: OK "
+          f"(signal={blocked_report.overall_signal.value}, "
+          f"reason={blocked_report.news_impact!r})")
+
+    # Non-blocked path: same inputs, no event_blocked -> normal signal
+    clean_report = builder.build(
+        'XAUUSD', 'H1', 2400.0, mock_indicators, mock_patterns,
+    )
+    assert clean_report.news_impact is None, \
+        f"Expected no news_impact, got {clean_report.news_impact!r}"
+    print("  No-block path keeps news_impact=None: OK")
+
+    # Medium-impact event: should NOT trigger the override. To make this
+    # test meaningful we need a setup that would otherwise produce a real
+    # directional signal — trend_score=80 + low ADX bypass isn't enough,
+    # so we use the H1 swing plan's min_trend=50 floor as the gate.
+    strong_indicators = dict(mock_indicators)
+    strong_indicators['trend_score'] = 80
+    strong_indicators['adx'] = 32
+    strong_indicators['rsi'] = 55
+    strong_patterns = [
+        {'name': 'Bull Flag', 'direction': 'bullish', 'confidence': 0.85},
+        {'name': 'Higher Highs', 'direction': 'bullish', 'confidence': 0.80},
+    ]
+    no_block = builder.build(
+        'XAUUSD', 'H1', 2400.0, strong_indicators, strong_patterns,
+    )
+    assert no_block.overall_signal in (SignalStrength.BUY, SignalStrength.STRONG_BUY), \
+        f"Setup expected BUY/STRONG_BUY, got {no_block.overall_signal}"
+    medium_blocked = builder.build(
+        'XAUUSD', 'H1', 2400.0, strong_indicators, strong_patterns,
+        event_blocked={
+            'blocked': True, 'event': 'ISM PMI', 'minutes_until': 10,
+            'impact': 'medium', 'currency': 'USD',
+        },
+    )
+    assert medium_blocked.overall_signal in (SignalStrength.BUY, SignalStrength.STRONG_BUY), \
+        f"Medium-impact should NOT auto-block; got {medium_blocked.overall_signal}"
+    assert medium_blocked.news_impact is None, \
+        f"Medium-impact should not write news_impact, got {medium_blocked.news_impact!r}"
+    print(f"  Medium-impact event does not auto-block: OK (signal={medium_blocked.overall_signal.value})")
+
+    print("\n=== SMOKE: news + events render ===")
+    from bots.news_fetcher import NewsItem
+    from bots.economic_calendar import EconomicEvent
+    sample_news = [
+        NewsItem(
+            title="Fed signals rate cut on soft CPI print",
+            link="https://example.com/x", published="", source="TestFeed",
+            age_minutes=8, impact_stars=5,
+            relevance_drivers=['fed', 'inflation'], epoch=0.0, tags=[],
+        ),
+        NewsItem(
+            title="Bitcoin ETF inflows hit $1B as CPI cools",
+            link="https://example.com/y", published="", source="TestFeed",
+            age_minutes=42, impact_stars=4,
+            relevance_drivers=['etf', 'inflation'], epoch=0.0, tags=[],
+        ),
+        # 2★ item — defense-in-depth filter should drop this
+        NewsItem(
+            title="Background sector story, no catalyst",
+            link="https://example.com/z", published="", source="TestFeed",
+            age_minutes=120, impact_stars=2,
+            relevance_drivers=[], epoch=0.0, tags=[],
+        ),
+    ]
+    sample_events = [
+        EconomicEvent(
+            name="FOMC Interest Rate Decision", date="2026-07-29",
+            time="19:00", impact="high", currency="USD",
+            description="Fed policy",
+            impact_stars=5,
+            impact_reason="Top macro indicator; sets the rate curve.",
+        ),
+        EconomicEvent(
+            name="Non-Farm Payrolls", date="2026-08-07",
+            time="13:30", impact="high", currency="USD",
+            description="US employment report",
+            impact_stars=5,
+            impact_reason="Top jobs indicator; Fed-watchers key off it.",
+        ),
+    ]
+    rich_report = builder.build(
+        'BTCUSDT', 'H1', 67000, mock_indicators, mock_patterns,
+        news_items=sample_news, upcoming_events=sample_events,
+    )
+    rich_text = rich_report.to_telegram_text(tier='premium')
+    assert 'TOP HEADLINES' in rich_text, "News header missing from premium text"
+    assert 'UPCOMING EVENTS' in rich_text, "Events header missing from premium text"
+    assert 'Fed signals rate cut' in rich_text, "News title missing"
+    # Defense-in-depth: 2★ news item should NOT render
+    assert 'Background sector story' not in rich_text, \
+        "2★ item should be filtered out by the render guard"
+    assert 'FOMC Interest Rate Decision' in rich_text, "Event name missing"
+    assert 'Top macro indicator' in rich_text, "Event reason missing"
+    print("  News + events render in premium text: OK")
+    print("\n--- PREMIUM REPORT (with news+events) preview ---")
+    print(rich_text[-1200:])  # show the tail where the new block lands

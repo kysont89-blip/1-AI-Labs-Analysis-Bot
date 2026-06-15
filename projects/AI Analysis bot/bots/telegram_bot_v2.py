@@ -549,6 +549,49 @@ async def run_analysis_direct(update, context, user_id, symbol, tf, analysis_typ
         div_detector = DivergenceDetector(df)
         div_signals = div_detector.detect_all(indicators.rsi)
 
+        # ── News + Events (premium report context) ──
+        # Fetched early so the event-block override can be applied inside
+        # report_builder.build() — that keeps the recorded signal, the
+        # displayed signal, and the position-sizer all in sync.
+        # Failures are isolated: an offline RSS feed or empty calendar
+        # must not blank the analysis.
+        news_items: List = []
+        upcoming_events: List = []
+        news_block: Optional[Dict] = None
+        try:
+            _gathered = await asyncio.gather(
+                news_fetcher.get_headlines(topics=None, limit=8),
+                asyncio.to_thread(calendar.get_upcoming_events, 3),
+                asyncio.to_thread(calendar.check_signal_blocked, symbol),
+                return_exceptions=True,
+            )
+            _news_raw, _events_raw, _block_raw = _gathered
+        except Exception as e:
+            logger.warning(f"[News/Calendar] concurrent fetch failed: {e}")
+            _news_raw = _events_raw = _block_raw = None
+        # Defensive: gather() can return exception objects per task
+        if isinstance(_news_raw, list):
+            news_items = _news_raw
+        elif isinstance(_news_raw, Exception):
+            logger.warning(f"[News] fetch failed: {_news_raw}")
+        if isinstance(_events_raw, list):
+            upcoming_events = _events_raw
+        elif isinstance(_events_raw, Exception):
+            logger.warning(f"[Calendar] get_upcoming_events failed: {_events_raw}")
+        if isinstance(_block_raw, dict):
+            news_block = _block_raw
+        elif isinstance(_block_raw, Exception):
+            logger.warning(f"[Calendar] check_signal_blocked failed: {_block_raw}")
+        # Re-filter events to the symbol's currency so the embedded
+        # UPCOMING EVENTS block matches the /events command's UX.
+        try:
+            if upcoming_events:
+                upcoming_events = calendar.get_events_for_symbol(
+                    symbol, days_ahead=3
+                ) or upcoming_events[:3]
+        except Exception as e:
+            logger.warning(f"[Calendar] get_events_for_symbol failed: {e}")
+
         # Build report
         report = report_builder.build(
             symbol=symbol, timeframe=tf, price=current_price,
@@ -557,7 +600,10 @@ async def run_analysis_direct(update, context, user_id, symbol, tf, analysis_typ
             order_flow=order_flow_data,
             divergence=div_signals,
             tier='premium',
-            trading_style=getattr(user_obj, 'trading_style', None) or 'auto'
+            trading_style=getattr(user_obj, 'trading_style', None) or 'auto',
+            news_items=news_items,
+            upcoming_events=upcoming_events,
+            event_blocked=news_block,
         )
         code_confidence = report.signal_confidence
 
@@ -585,7 +631,15 @@ async def run_analysis_direct(update, context, user_id, symbol, tf, analysis_typ
                     (ai_result.signal == 'SHORT' and report.trend_score < 0) or
                     (ai_result.signal == 'NEUTRAL')
                 )
-                if ai_confident and ai_agrees:
+                # Event-block guard: if a high-impact economic event is in
+                # the buffer window, build() already forced the signal to
+                # NEUTRAL. We must NOT let the AI undo that and push the
+                # signal back to BUY/SELL. Block = no trade, full stop.
+                event_block_active = bool(
+                    news_block and news_block.get('blocked')
+                    and news_block.get('impact') == 'high'
+                )
+                if ai_confident and ai_agrees and not event_block_active:
                     signal_map = {
                         'LONG': SignalStrength.BUY if ai_result.confidence < 0.8 else SignalStrength.STRONG_BUY,
                         'SHORT': SignalStrength.SELL if ai_result.confidence < 0.8 else SignalStrength.STRONG_SELL,
@@ -594,6 +648,11 @@ async def run_analysis_direct(update, context, user_id, symbol, tf, analysis_typ
                     report.overall_signal = signal_map.get(ai_result.signal, SignalStrength.NEUTRAL)
                     report.signal_confidence = ai_result.confidence
                     logger.info(f"AI override: {ai_result.signal} ({ai_result.confidence:.0%})")
+                elif event_block_active and ai_confident and ai_agrees:
+                    logger.info(
+                        f"AI suggested {ai_result.signal} but event-blocked "
+                        f"({news_block.get('event')}) — keeping NEUTRAL"
+                    )
                 else:
                     # AI returned but low confidence or disagrees - keep code signal
                     if ai_result:
@@ -618,11 +677,11 @@ async def run_analysis_direct(update, context, user_id, symbol, tf, analysis_typ
             recent.insert(0, symbol)
             user_recent_pairs[user_id] = recent[:5]
 
-        # ═══════════════════════════════════════════════
-        # GAP 2: NEWS / EVENT FILTER
-        # ═══════════════════════════════════════════════
-        news_block = calendar.check_signal_blocked(symbol)
-        
+        # GAP 2: NEWS / EVENT FILTER is fetched earlier in the flow
+        # (just before report_builder.build) so the event-block override
+        # can be applied inside build(). news_block / news_items /
+        # upcoming_events are already populated by this point.
+
         # ═══════════════════════════════════════════════
         # GAP 4: REGIME DETECTION
         # ═══════════════════════════════════════════════
@@ -805,12 +864,22 @@ Leverage: {leverage}x
 Margin Required: ~${margin:,.0f}
 """
             
-            # Gap 2: News Filter — keep but concise
-            if news_block:
-                full_text += f"🔴 **MARKET CALENDAR**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                full_text += f"⚠️ {news_block['event']} in {news_block['minutes_until']} min\n"
-                full_text += f"Impact: {news_block['impact'].upper()}\n"
-                full_text += f"Note: {news_block['recommendation']}\n\n"
+            # Gap 2: AUTO-BLOCKED callout. The full news + events list
+            # is now embedded in the report body itself (📰 TOP HEADLINES
+            # and 📅 UPCOMING EVENTS, rendered by report_builder).
+            # Here we just point the user to it and explain why the
+            # signal was forced to NO TRADE. Only shows when the block
+            # actually fired (i.e. high-impact event in the buffer).
+            if news_block and news_block.get('blocked'):
+                full_text += (
+                    f"🚫 **AUTO-BLOCKED BY EVENT**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚠️ {news_block['event']} in "
+                    f"{news_block['minutes_until']} min "
+                    f"({news_block['impact'].upper()} impact)\n"
+                    f"Signal forced to NO TRADE. "
+                    f"See 📅 UPCOMING EVENTS below.\n\n"
+                )
             
             # Gap 3: Divergence — generic only
             # div is a DivergenceSignal dataclass (see divergence_detector.py:29).
@@ -887,6 +956,14 @@ Structure: {structure_label}
                 full_text += f"📊 **MULTI-TIMEFRAME VIEW**\n━━━━━━━━━━━━━━━━━━━━━━\n{mtf_text}\n"
                 if mtf_check.warning:
                     full_text += f"⚠️ {mtf_check.warning}\n"
+
+            # Truncate the Full view to stay under Telegram's 4096-char
+            # message limit. The Premium report + news + events + position
+            # sizing + divergence/regime/session/AI/MTF can easily exceed
+            # 4096 chars on a busy day. Mirrors the truncation in
+            # news_command (line ~2029) and events_command (line ~2080).
+            if len(full_text) > 4000:
+                full_text = full_text[:3990] + "…\n\n" + DISCLAIMER_SHORT
 
         # Record analysis in database (for signal tracking).
         # analysis_id is hoisted out of the try so we can wire it into the
