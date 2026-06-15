@@ -1,0 +1,46 @@
+# ---- Secrets (NEVER commit) ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---- Python ----
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Local data / caches (runtime artifacts) ----
+data_cache/
+verify_uploads/
+
+# ---- Databases (user data; do not track) ----
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Logs ----
+*.log
+logs/
+
+# ---- Backtest / report outputs (keep source, ignore generated) ----
+# (uncomment if you don't want to track these)
+# backtest_results_v2.json
+# backtest_results_v2.md

@@ -1,0 +1,102 @@
+{
+  "config": {
+    "symbols": [
+      "BTCUSDT"
+    ],
+    "timeframes": [
+      "H1"
+    ],
+    "days": 90,
+    "plans": [
+      "swing"
+    ],
+    "with_patterns": true,
+    "with_divergence": true,
+    "include_fees": false,
+    "fee_bps": 5.0
+  },
+  "combos": [
+    {
+      "symbol": "BTCUSDT",
+      "timeframe": "H1",
+      "plan": "swing",
+      "n_signals": 2591,
+      "n_tradable": 1383,
+      "n_wins": 550,
+      "n_losses": 505,
+      "n_timeouts": 328,
+      "win_rate": 39.77,
+      "avg_win_r": 1.8,
+      "avg_loss_r": -1.0,
+      "profit_factor": 2.056,
+      "net_pnl_r": 572.81,
+      "max_drawdown_r": 62.11,
+      "avg_bars": 37.4,
+      "win_rate_raw": 39.76861894432393,
+      "net_pnl_r_raw": 572.8070000000026,
+      "wr_by_confluence": {
+        "50-60": [
+          250,
+          46.8
+        ],
+        "60-70": [
+          351,
+          38.18
+        ],
+        "70-80": [
+          404,
+          42.33
+        ],
+        "80-101": [
+          378,
+          33.86
+        ]
+      },
+      "wr_by_regime": {
+        "downtrend": [
+          129,
+          28.68
+        ],
+        "strong_uptrend": [
+          369,
+          42.01
+        ],
+        "uptrend": [
+          132,
+          31.82
+        ],
+        "breakout": [
+          286,
+          44.76
+        ],
+        "chop": [
+          75,
+          29.33
+        ],
+        "range": [
+          131,
+          47.33
+        ],
+        "strong_downtrend": [
+          261,
+          39.85
+        ]
+      }
+    }
+  ],
+  "canary": {
+    "symbol": "BTCUSDT",
+    "timeframe": "H1",
+    "plan": "swing",
+    "verdict": "PASS",
+    "base_wr": 39.7686,
+    "shifted_wr": 39.3468,
+    "delta_pp": 0.4218,
+    "base_pnl": 572.81,
+    "shifted_pnl": 523.62,
+    "delta_pnl": 49.19,
+    "base_trades": 1383,
+    "shifted_trades": 1286
+  },
+  "elapsed_sec": 2130.0
+}
