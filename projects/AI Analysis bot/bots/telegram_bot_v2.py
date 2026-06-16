@@ -56,6 +56,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters,
     ContextTypes, ConversationHandler
 )
+from telegram.error import NetworkError, TimedOut, RetryAfter
 
 from database import UserDatabase, UserTier, TIER_NAMES, TIER_LIMITS
 from indicators import IndicatorCalculator
@@ -2666,6 +2667,40 @@ async def post_init(application: Application):
     logger.info(f"Ollama status: {'Online' if ollama_status else 'Offline'}")
 
 
+async def on_ptb_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """PTB error handler — downgrades transient network noise to a single
+    WARNING line. Without this, a Telegram API 502 produces a multi-screen
+    traceback in the log every retry. Real bugs (handler exceptions,
+    serialization errors, etc.) still produce full tracebacks.
+
+    Categories handled:
+      - NetworkError (502/503/504 from Telegram's API, ECONNRESET, etc.)
+      - TimedOut (long-poll timeout — expected occasionally)
+      - RetryAfter (Telegram rate-limit telling us to back off)
+
+    Anything else falls through to logger.exception so we still see real
+    bugs with their full stack.
+    """
+    err = context.error
+    if isinstance(err, RetryAfter):
+        # Telegram is rate-limiting us. Respect the suggested backoff.
+        logger.warning(
+            f"Telegram rate-limit hit: retry after {err.retry_after}s"
+        )
+        return
+    if isinstance(err, (NetworkError, TimedOut)):
+        # Transient. PTB will retry on its own — just record it briefly
+        # so we know what's happening if the log is being watched.
+        logger.warning(
+            f"Transient Telegram network error "
+            f"({type(err).__name__}): {err}"
+        )
+        return
+    # Real exception in a handler. PTB would log this anyway, but we
+    # add a short header so the traceback is easy to find.
+    logger.exception(f"Unhandled exception in PTB handler: {err}")
+
+
 def main():
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
@@ -2730,6 +2765,12 @@ def main():
     application.add_handler(CommandHandler("reject", reject_command))
 
     application.add_handler(CallbackQueryHandler(handle_menu, pattern='^menu_'))
+
+    # Error handler: transient network errors (502/503/504, TimedOut,
+    # RetryAfter) get a single WARNING line instead of a full traceback.
+    # See on_ptb_error() above. Real handler exceptions still log with
+    # full stack.
+    application.add_error_handler(on_ptb_error)
 
     logger.info("Starting AI Analysis Bot...")
     application.run_polling(allowed_updates=Update.ALL_TYPES, poll_interval=1, timeout=30)
