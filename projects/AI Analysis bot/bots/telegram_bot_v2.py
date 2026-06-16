@@ -852,17 +852,82 @@ Support:    {', '.join(f'${s:,.0f}' for s in report.support[:3]) if report.suppo
             full_text = f"{DISCLAIMER_SHORT}\n\n" + report.to_telegram_text(tier='premium')
             full_text += "\n\n"
             
-            # Position sizing — sanitized (no formula, just recommendation)
-            # sizing is a PositionSizeResult dataclass (see position_sizer.py:16)
-            size_usd = sizing.risk_amount
-            margin = sizing.margin_required
-            leverage = sizing.leverage_used
-            full_text += f"""💰 **POSITION SIZING**
+            # Position sizing — instrument-native units, anchored to
+            # current price. sizing is a PositionSizeResult dataclass
+            # (see position_sizer.py:16). The display distinguishes:
+            #   - what you risk (2% of account, the max loss if SL hits)
+            #   - what you control (position in BTC / lots / ounces)
+            #   - what you put up (margin = position / leverage)
+            sym = sizing.instrument
+            # Instrument-native stop distance + position units.
+            # Crypto: $ distance, units = coins, position in BTC.
+            # XAUUSD: $ distance, units = ounces (1 lot = 100 oz).
+            # FX: pip distance, units = base currency, lots = standard lots.
+            if 'JPY' in sym:
+                pip_size = 0.01
+                pip_value_per_lot = 1000.0 / sizing.entry_price  # matches _calc_fx
+                stop_pips = sizing.stop_distance / pip_size
+                units_str = f"{sizing.lot_size:.2f} lots ({sizing.units:,.0f} base)"
+                pos_value_str = f"${sizing.total_value_at_risk:,.0f} notional"
+                stop_str = f"{stop_pips:.0f} pips (${sizing.stop_distance:.2f})"
+            elif sym in ('EURUSD', 'GBPUSD', 'AUDUSD', 'USDCAD', 'NZDUSD'):
+                # Non-JPY FX pairs: pip = 0.0001, ~$10 per pip per lot.
+                pip_size = 0.0001
+                stop_pips = sizing.stop_distance / pip_size
+                units_str = f"{sizing.lot_size:.2f} lots ({sizing.units:,.0f} base)"
+                pos_value_str = f"${sizing.total_value_at_risk:,.0f} notional"
+                stop_str = f"{stop_pips:.1f} pips (${sizing.stop_distance:.5f})"
+            elif sym == 'XAUUSD':
+                stop_dollars = sizing.stop_distance
+                oz_per_lot = 100
+                stop_pips_xau = stop_dollars / 0.01  # 1 pip = 0.01 for XAU
+                units_str = f"{sizing.lot_size:.2f} lots ({sizing.units:.1f} oz)"
+                pos_value_str = f"${sizing.total_value_at_risk:,.0f} notional"
+                stop_str = (f"${stop_dollars:.2f} ({stop_pips_xau:.0f} pips, "
+                            f"{abs(stop_dollars / sizing.entry_price) * 100:.2f}%)")
+            elif sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'SOLUSDT',
+                                                  'AVAXUSDT', 'BNBUSDT', 'ADAUSDT',
+                                                  'DOTUSDT', 'MATICUSDT', 'LINKUSDT',
+                                                  'LTCUSDT', 'BCHUSDT', 'XRPUSDT'):
+                stop_pct = (sizing.stop_distance / sizing.entry_price) * 100
+                # Asset symbol = strip 'USDT' suffix (BTCUSDT -> BTC, etc.)
+                asset = sym.replace('USDT', '')
+                units_str = f"{sizing.units:.4f} {asset}"
+                pos_value_str = f"${sizing.total_value_at_risk:,.0f} notional"
+                stop_str = (f"${sizing.stop_distance:,.2f} "
+                            f"({stop_pct:.2f}% of ${sizing.entry_price:,.2f})")
+            else:
+                # Other / unknown — fall back to dollar display
+                units_str = f"{sizing.units:,.4f} units"
+                pos_value_str = f"${sizing.total_value_at_risk:,.0f} notional"
+                stop_str = f"${sizing.stop_distance:,.2f}"
+            full_text += f"""💰 **POSITION SIZING** ({sym})
 ━━━━━━━━━━━━━━━━━━━━━━
-Suggested Size: ${size_usd:,.0f} USDT
-Leverage: {leverage}x
-Margin Required: ~${margin:,.0f}
+Account: ${sizing.account_balance:,.0f}
+Risk: {sizing.risk_percent:.0f}% = ${sizing.risk_amount:,.0f} (max loss if SL hits)
+
+📊 **TRADE LEVELS**
+Entry: ${sizing.entry_price:,.5f}
+SL:    ${sizing.stop_loss:,.5f}
+Stop distance: {stop_str}
+
+🎯 **POSITION**
+Size: {units_str}
+Position: {pos_value_str}
+Leverage: {sizing.leverage_used:.0f}x
+Margin Required: ${sizing.margin_required:,.0f}
 """
+            # Leverage / stop warnings from the sizer (already instrument-
+            # specific, see _calc_crypto/_calc_gold/_calc_fx in
+            # position_sizer.py). Skip the platform_note footer — it
+            # duplicates the max_leverage display, and the user already
+            # sees "Leverage: Nx" above.
+            if sizing.warning:
+                # Strip the trailing [platform: ...] line if present
+                warn_text = sizing.warning.split('\n[')[0]
+                if warn_text.strip():
+                    full_text += f"⚠️ {warn_text.strip()}\n"
+            full_text += "\n"
             
             # Gap 2: AUTO-BLOCKED callout. The full news + events list
             # is now embedded in the report body itself (📰 TOP HEADLINES
