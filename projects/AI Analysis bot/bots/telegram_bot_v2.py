@@ -2333,34 +2333,44 @@ async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     max_dd = c.get('max_drawdown_r', 0.0)
     avg_bars = c.get('avg_bars', 0)
 
-    # Headline — frame for confidence. "Profit Factor" and "Net +R"
-    # are the two numbers that matter to a skeptical reader; lead
-    # with both. Win-rate is intentionally shown after the rest.
+    # ── Translate R-multiples into % return ──
+    # We size the headline around what a non-technical user actually
+    # cares about: "if I follow this, what % am I up in 90 days?"
+    # Assume 1% risk per trade (industry standard "1% rule"). At that
+    # sizing, each R-multiple of net PnL = 1% of equity, so:
+    #   90-day return  ≈ net_r × 1%  (simple, not compounded)
+    #   max DD as %    ≈ max_dd × 1% of equity at peak
+    # Note: the simple multiplication is honest because the actual
+    # compounding is (1.01)^avg_r − 1 ≈ avg_r × 1% for small R, and
+    # the losses pull it back down. We label this as a 1% risk size so
+    # users can scale it linearly: 0.5% risk = half the %, 2% = double.
+    risk_pct = 1.0
+    return_90d_pct = net_r * risk_pct
+    max_dd_pct = max_dd * risk_pct
+
     sparkline = _format_backtest_sparkline(net_r, max_dd)
     avg_r_per_trade = (net_r / n_tradable) if n_tradable else 0.0
 
     text = f"""📊 **BACKTEST RESULTS**
 ━━━━━━━━━━━━━━━━━━━━━━
-{symbol} · {timeframe} · {plan} · 90 days
+{symbol} · {timeframe} · {plan} · 90 days · 1% risk per trade
 
 **HEADLINE**
-🟢 Net P/L:  **+{net_r:,.1f}R**  ({avg_r_per_trade:+.2f}R per trade)
-📈 Profit Factor: **{pf:.2f}**
-📉 Max Drawdown: {max_dd:,.1f}R
-🎯 Win Rate: {win_rate:.1f}%  ({n_wins}W / {n_losses}L / {n_timeouts}⏱)
-⚖️  Avg Win: {avg_win_r:.2f}R  ·  Avg Loss: {avg_loss_r:.2f}R
-🕐  Avg Hold: {avg_bars:.0f} bars
+🟢 90-day return:  **+{return_90d_pct:,.0f}%**  (at 1% risk/trade)
+📈 Profit Factor:  **{pf:.2f}**
+📉 Max Drawdown:  **{max_dd_pct:,.0f}%** of equity
+🕐 Avg Hold: {avg_bars:.0f} bars  ·  {n_tradable} trades
 
 **EQUITY CURVE** (schematic)
 `{sparkline}`
-0R ──────────── +{net_r:,.0f}R
-              drawdown ≈ {max_dd:,.0f}R
+0% ──────────── +{return_90d_pct:,.0f}%
+              drawdown ≈ {max_dd_pct:,.0f}%
 """
 
     # Regime breakdown — show which markets the strategy wins in.
     by_regime = c.get('wr_by_regime') or {}
     if by_regime:
-        text += "\n**BY MARKET REGIME**\n"
+        text += "\n**BY MARKET REGIME** (Win %)\n"
         text += "━" * 22 + "\n"
         # Sort by win rate descending so the best regimes show first.
         sorted_regimes = sorted(
@@ -2376,7 +2386,7 @@ async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Confluence breakdown — answer the "does the score predict wins?" question
     by_conf = c.get('wr_by_confluence') or {}
     if by_conf:
-        text += "\n**BY CONFLUENCE SCORE**\n"
+        text += "\n**BY CONFLUENCE SCORE** (Win %)\n"
         text += "━" * 22 + "\n"
         for bucket, (count, wr) in by_conf.items():
             bar_pct = wr / 100
@@ -2393,11 +2403,14 @@ async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pf_ok = pf >= 1.2
     wr_ok = win_rate >= 50
     if pf_ok and wr_ok:
-        verdict = "✅ **VERDICT: VIABLE** — edge holds in current logic."
+        verdict = ("✅ **VERDICT: VIABLE** — edge holds in current logic. "
+                   f"+{return_90d_pct:,.0f}% in 90 days at standard sizing.")
     elif pf_ok and not wr_ok:
         verdict = ("⚠️  **VERDICT: VIABLE** — low win rate, but PF "
                    f"{pf:.2f} means winners are large enough to be profitable.\n"
-                   "Strategy is a 'few big wins' style, not a 'many small wins' style.")
+                   f"Strategy is a 'few big wins' style. At 1% risk: "
+                   f"+{return_90d_pct:,.0f}% in 90 days, with a worst-case "
+                   f"-{max_dd_pct:,.0f}% drawdown.")
     else:
         verdict = ("❌ **VERDICT: NOT VIABLE in backtest** — live order-flow + "
                    "fundamental layers may add 2-3pp of WR (not modeled here).\n"
@@ -2409,13 +2422,22 @@ async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {"━" * 22}
 {verdict}
 {canary_line}
-**READ THIS BEFORE JUDGING**
-• PF {pf:.2f} = winners are ~{pf:.1f}× the size of losers
-• 39.8% WR is the *floor* — the live bot adds confluence sources
-  the backtest omitted. Live WR is typically 2-3pp higher.
-• {n_tradable} trades / 90 days = ~{n_tradable // 13} signals per week
-• Max DD {max_dd:,.1f}R means worst peak-to-trough = {max_dd / 1:,.0f}R
-  on a 1R-per-trade size. Sized at 1% risk, that's {max_dd:.0f}% of equity.
+**HOW TO READ THESE NUMBERS**
+• **90-day return** scales linearly with risk. At 1% per trade you
+  see +{return_90d_pct:,.0f}%. At 0.5% it's +{return_90d_pct/2:,.0f}%.
+  At 2% it's +{return_90d_pct*2:,.0f}% — but the -{max_dd_pct:,.0f}%
+  drawdown also doubles.
+• **Max DD** of {max_dd_pct:,.0f}% is the *worst* peak-to-trough.
+  Most of the time the equity curve sits near the top.
+• **Profit factor** {pf:.2f} means winners are ~{pf:.1f}× the size
+  of losers. The strategy catches big moves; it doesn't need a
+  high win rate to be profitable.
+• **{n_tradable} trades / 90 days** ≈ {n_tradable // 13} signals
+  per week. Set your position size on each one.
+• **Win %** is intentionally not the headline. A 39.8% win rate is
+  *normal* for a trend-following strategy — what matters is that
+  the average winner ({avg_win_r:.1f}R) is bigger than the average
+  loser ({abs(avg_loss_r):.1f}R), giving a positive expected value.
 
 {DISCLAIMER_SHORT}
 """

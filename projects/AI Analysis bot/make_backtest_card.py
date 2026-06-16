@@ -164,6 +164,14 @@ def main() -> int:
     max_dd = c.get("max_drawdown_r", 0.0)
     n_trades = c.get("n_tradable", 0)
 
+    # Translate R-multiples into % return. 1% risk per trade is the
+    # industry-standard "1% rule" — this is what most bot users will
+    # actually use. Sized differently, the % scales linearly: at 0.5%
+    # risk you see half the return and half the drawdown.
+    risk_pct = 1.0
+    return_90d_pct = net_r * risk_pct
+    max_dd_pct = max_dd * risk_pct
+
     img = Image.new("RGB", (CARD_W, CARD_H), BG_TOP)
     _draw_vertical_gradient(img, BG_TOP, BG_BOT)
     draw = ImageDraw.Draw(img, "RGBA")
@@ -182,13 +190,16 @@ def main() -> int:
     sym_text = f"{symbol}  ·  {timeframe}  ·  {plan}  ·  90 days"
     _draw_text_centered(draw, sym_text, f_sym, 105, TEXT_MUTED)
 
-    # ── Headline number (Net P/L) ──
+    # ── Headline number — 90-day return in % ──
     f_huge = _font(96)
     f_label = _font(20)
-    head_text = f"+{net_r:,.0f}R"
+    head_text = f"+{return_90d_pct:,.0f}%"
     _draw_text_centered(draw, head_text, f_huge, 145, ACCENT_GREEN)
-    _draw_text_centered(draw, f"net profit on 1R-per-trade sizing · {n_trades} trades",
-                         f_label, 260, TEXT_SECONDARY)
+    _draw_text_centered(
+        draw,
+        f"in 90 days at 1% risk per trade · {n_trades} trades",
+        f_label, 260, TEXT_SECONDARY,
+    )
 
     # ── Sub-metrics row ──
     f_metric_v = _font(44)
@@ -198,8 +209,8 @@ def main() -> int:
     col_w = CARD_W // 3
     metrics = [
         (f"{pf:.2f}", "Profit Factor"),
-        (f"{win_rate:.1f}%", "Win Rate"),
-        (f"−{max_dd:.0f}R", "Max Drawdown"),
+        (f"{win_rate:.0f}%", "Win %"),
+        (f"−{max_dd_pct:,.0f}%", "Max Drawdown"),
     ]
     for i, (val, label) in enumerate(metrics):
         cx = col_w * i + col_w // 2
@@ -226,8 +237,8 @@ def main() -> int:
 
     img.save(OUTPUT_PATH, "PNG", optimize=True)
     print(f"✓ Wrote {OUTPUT_PATH} ({CARD_W}×{CARD_H})")
-    print(f"  Headline: +{net_r:,.0f}R net · PF {pf:.2f} · "
-          f"{win_rate:.1f}% WR · {n_trades} trades")
+    print(f"  Headline: +{return_90d_pct:,.0f}% in 90 days · "
+          f"PF {pf:.2f} · {win_rate:.0f}% Win · -{max_dd_pct:,.0f}% DD")
     return 0
 
 
