@@ -416,11 +416,30 @@ Upgrade to PREMIUM via /upgrade
 
         text = f"""📊 {self.symbol} | {self.timeframe} | {self.timestamp}
 
-{emoji} **{self._direction_text()}**
-Confidence: {self.signal_confidence:.0%}
-━━━━━━━━━━━━━━━━━━━━━━
+{emoji} **{self._direction_text()}** · Confidence {self.signal_confidence:.0%}"""
 
-{'⚠️ NO TRADE — Market conditions unclear.\nWait for stronger setup.' if self.trend == 'ranging' else f"📈 **TRADE SETUP**\n━━━━━━━━━━━━━━━━━━━━━━\nEntry Zone: {self.entry_zone[0]:,.2f} - {self.entry_zone[1]:,.2f}\nStop Loss:  {self.stop_loss:,.2f}\nTake Profit: {self.take_profit:,.2f}\nRisk:Reward ≈ 1:{self.risk_reward:.1f}"}
+        # TL;DR — the trade in 5 lines. User gets this in one glance;
+        # the rest of the report is the optional analysis.
+        if self.trend == 'ranging':
+            text += f"""
+━━━━━━━━━━━━━━━━━━━━━━
+⚠️ NO TRADE — Market conditions unclear.
+See 🚦 HEDGED BREAKOUT below for the range play.
+
+📈 **RANGE ZONE** (informational)
+━━━━━━━━━━━━━━━━━━━━━━
+Entry Zone: {self.entry_zone[0]:,.2f} - {self.entry_zone[1]:,.2f}
+Stop Loss:  {self.stop_loss:,.2f}
+Take Profit: {self.take_profit:,.2f}"""
+        else:
+            text += f"""
+━━━━━━━━━━━━━━━━━━━━━━
+Entry: {self.entry_zone[0]:,.2f}–{self.entry_zone[1]:,.2f}
+Stop:  {self.stop_loss:,.2f}
+TP:    {self.take_profit:,.2f}
+R:R ≈ 1:{self.risk_reward:.1f}"""
+
+        text += f"""
 
 📋 **ANALYSIS SUMMARY**
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -478,6 +497,13 @@ Key Observation: {self.vision_analysis.get('trend', 'N/A')}
         news_events = self._news_events_section()
         if news_events:
             text += news_events
+
+        # Hedged Breakout — premium only, ranging market only. Renders
+        # the long+short play so NEUTRAL signals have something
+        # actionable.
+        hedge = self._hedged_breakout_section()
+        if hedge:
+            text += hedge
 
         return text
 
@@ -655,6 +681,123 @@ Key Observation: {self.vision_analysis.get('trend', 'N/A')}
         if not parts:
             return ""
         return "\n\n" + "\n\n".join(parts) + "\n"
+
+    # ── HEDGED BREAKOUT (premium, ranging market only) ─────────────
+
+    def _hedged_breakout_section(self) -> str:
+        """Render the HEDGED BREAKOUT plan — long and short at the same time.
+
+        Used when the bot is NEUTRAL on a ranging market. Both sides open at
+        the range mid; the SL on each side sits just past the opposite edge
+        of the range (0.1·ATR buffer to absorb wicks).
+
+        Two TP variants are shown:
+          • Conservative (default) — TP at the opposite edge, R:R ≈ 0.9.
+            In a chop: one side's SL + the other side's TP → ~0R net
+            (the small -0.1R is the buffer cost). On a clean break: the
+            winning side pays 0.9R, the other pays 1R → -0.1R. So
+            Conservative is "don't lose money" — the user sits out the
+            chop and breaks even either way.
+          • Aggressive — TP at 2× the range height, R:R ≈ 3.7.
+            In a chop: both sides hit SL → -2R. On a clean break: the
+            winning side pays 2R, the other pays 1R → +1R net. So
+            Aggressive is "make money on real breakouts, pay the
+            tuition on chops."
+
+        Risk per side: 0.5% of balance, so total exposure is 1% (same as
+        a normal trade). No directional guess required.
+        """
+        # Only render on ranging markets. entry_zone is (low, high) for
+        # ranging and is computed from price ± 0.5·ATR by build().
+        if self.trend != 'ranging':
+            return ""
+        if not self.entry_zone or len(self.entry_zone) != 2:
+            return ""
+
+        e0, e1 = float(self.entry_zone[0]), float(self.entry_zone[1])
+        atr = float(self.atr) if self.atr else max(1.0, (e1 - e0))
+        if atr <= 0:
+            return ""
+
+        # Anchor long and short on the entry zone (range mid). The SL on
+        # each side sits just past the opposite edge of the range (a thin
+        # 0.1·ATR buffer so a clean break is not stopped out by wicks).
+        long_entry = (e0 + e1) / 2
+        short_entry = long_entry
+        long_sl = e0 - atr * 0.1      # just below support
+        short_sl = e1 + atr * 0.1     # just above resistance
+
+        # Conservative TPs sit at the opposite edge of the range. With
+        # the 0.1·ATR SL buffer, the SL distance is slightly larger
+        # than the TP distance, so R:R ≈ 0.9 — meaning the chop case
+        # nets -0.1R, and the break case nets +0.9R.
+        long_tp_conservative = e1
+        short_tp_conservative = e0
+
+        # Aggressive TPs sit at 2× the range height beyond entry.
+        # R:R ≈ 3.7 — the chop case nets -2R, the break case nets +1R
+        # (winning side pays 2R, losing side pays 1R).
+        range_height = e1 - e0
+        long_tp_aggressive = long_entry + range_height * 2
+        short_tp_aggressive = short_entry - range_height * 2
+
+        # R-multiples
+        long_risk = long_entry - long_sl
+        short_risk = short_sl - short_entry
+        long_rr_cons = (long_tp_conservative - long_entry) / long_risk
+        short_rr_cons = (short_entry - short_tp_conservative) / short_risk
+        long_rr_agg = (long_tp_aggressive - long_entry) / long_risk
+        short_rr_agg = (short_entry - short_tp_aggressive) / short_risk
+
+        sym = self.symbol
+        lines = [
+            "🚦 **HEDGED BREAKOUT** (range play)",
+            "━" * 22,
+            "Open LONG and SHORT at the range mid. One side will be",
+            "stopped out (1R loss); the other runs to TP. No",
+            "directional guess required — let the market decide.",
+            "",
+            f"Range: {e0:,.2f} – {e1:,.2f}  (height ≈ {range_height:,.2f})",
+            f"Mid entry: {long_entry:,.2f}",
+            "",
+            "📊 **LONG side**",
+            f"  Entry: {long_entry:,.2f}",
+            f"  SL:    {long_sl:,.2f}  (below support)",
+            f"  TP-C:  {long_tp_conservative:,.2f}  (1:{long_rr_cons:.1f}  · conservative)",
+            f"  TP-A:  {long_tp_aggressive:,.2f}  (1:{long_rr_agg:.1f}  · aggressive)",
+            "",
+            "📊 **SHORT side**",
+            f"  Entry: {short_entry:,.2f}",
+            f"  SL:    {short_sl:,.2f}  (above resistance)",
+            f"  TP-C:  {short_tp_conservative:,.2f}  (1:{short_rr_cons:.1f}  · conservative)",
+            f"  TP-A:  {short_tp_aggressive:,.2f}  (1:{short_rr_agg:.1f}  · aggressive)",
+            "",
+            "💰 **SIZING** (per side, 0.5% risk · 1% total)",
+            f"  Risk: 0.5% per side — 1% total exposure",
+            f"  Set your position size so that if {sym} hits the SL,",
+            f"  you lose exactly 0.5% of your account balance.",
+            "  Conservative: whichever side hits SL first pays 0.5%,",
+            "  the other side's TP returns ~0.45% (R:R ≈ 0.9) → net",
+            "  ≈ −0.05% per cycle (the cost of the SL buffer).",
+            "  Aggressive: in a chop, both sides hit SL → −1% total.",
+            "  On a real break, one side pays 2R (1% win), the other",
+            "  pays 1R (0.5% loss) → net +0.5% per cycle.",
+            "",
+            "📌 **MECHANICS**",
+            "  • Conservative: TP at the opposite edge (R:R ≈ 0.9).",
+            "    Either way the market breaks, one side hits TP and",
+            "    the other hits SL → net ≈ 0R. The 0.1·ATR buffer",
+            "    costs ~0.1R per cycle. Use this when the user wants",
+            "    to sit out the chop without losing money.",
+            "  • Aggressive:   TP at 2× the range height (R:R ≈ 3.7).",
+            "    In a chop, both sides hit SL → −2R. On a real break,",
+            "    the winning side pays 2R, the losing side pays 1R →",
+            "    net +1R. Use this when the user expects a real",
+            "    breakout soon and is willing to pay for the chop.",
+            "  • Set the position size on each side so the SL",
+            "    distance = 0.5% of account balance.",
+        ]
+        return "\n" + "\n".join(lines) + "\n"
 
     # ── GENERIC DESCRIPTION HELPERS (obscure exact values) ──
 
@@ -1496,3 +1639,33 @@ if __name__ == '__main__':
     print("  News + events render in premium text: OK")
     print("\n--- PREMIUM REPORT (with news+events) preview ---")
     print(rich_text[-1200:])  # show the tail where the new block lands
+
+    # ── Smoke check for HEDGED BREAKOUT plan ──
+    print("\n=== SMOKE: HEDGED BREAKOUT plan on ranging market ===")
+    ranging_indicators = dict(mock_indicators)
+    ranging_indicators['trend_score'] = 5   # tiny bias — under the ±30 threshold
+    ranging_indicators['adx'] = 11         # low ADX = no trend
+    ranging_indicators['rsi'] = 50
+    ranging_report = builder.build(
+        'BTCUSDT', 'H1', 67000, ranging_indicators, [],
+    )
+    assert ranging_report.trend == 'ranging', \
+        f"Expected ranging, got {ranging_report.trend}"
+    assert ranging_report.overall_signal == SignalStrength.NEUTRAL, \
+        f"Expected NEUTRAL on ranging, got {ranging_report.overall_signal}"
+    hedge_text = ranging_report._hedged_breakout_section()
+    assert 'HEDGED BREAKOUT' in hedge_text, "HEDGE block missing"
+    assert 'LONG side' in hedge_text, "LONG side missing"
+    assert 'SHORT side' in hedge_text, "SHORT side missing"
+    assert 'Conservative' in hedge_text, "Conservative TP missing"
+    assert 'Aggressive' in hedge_text, "Aggressive TP missing"
+    assert '0.5%' in hedge_text, "Risk sizing missing"
+    full_text = ranging_report.to_telegram_text(tier='premium')
+    assert 'HEDGED BREAKOUT' in full_text, \
+        "HEDGE block should be in the full premium text on ranging markets"
+    # For non-ranging, the HEDGE block should NOT appear.
+    trend_text = rich_report.to_telegram_text(tier='premium')
+    assert 'HEDGED BREAKOUT' not in trend_text, \
+        "HEDGE block should NOT appear in trending (non-ranging) reports"
+    print(f"  HEDGED BREAKOUT renders only on ranging: OK "
+          f"({len(hedge_text)} chars, R:R lines present)")
