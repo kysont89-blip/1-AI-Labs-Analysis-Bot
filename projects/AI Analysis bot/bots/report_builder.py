@@ -719,35 +719,79 @@ Key Observation: {self.vision_analysis.get('trend', 'N/A')}
         if atr <= 0:
             return ""
 
-        # Anchor long and short on the entry zone (range mid). The SL on
-        # each side sits just past the opposite edge of the range (a thin
-        # 0.1·ATR buffer so a clean break is not stopped out by wicks).
-        long_entry = (e0 + e1) / 2
-        short_entry = long_entry
-        long_sl = e0 - atr * 0.1      # just below support
-        short_sl = e1 + atr * 0.1     # just above resistance
+        # Prefer REAL support/resistance from the indicator data when
+        # populated. The bot's indicators.to_dict() includes them
+        # (see indicators.py:42-43). If both are present and properly
+        # ordered, use them — they're more accurate than the
+        # synthetic ±0.5·ATR zone that build() uses as a fallback.
+        real_support = float(self.support[0]) if self.support else None
+        real_resistance = float(self.resistance[0]) if self.resistance else None
+        if (real_support is not None
+                and real_resistance is not None
+                and real_support < real_resistance
+                and real_resistance - real_support > atr * 0.3):
+            s = real_support
+            r = real_resistance
+            range_source = "real S/R"
+        else:
+            s, r = e0, e1
+            range_source = "synthetic zone"
 
-        # Conservative TPs sit at the opposite edge of the range. With
-        # the 0.1·ATR SL buffer, the SL distance is slightly larger
-        # than the TP distance, so R:R ≈ 0.9 — meaning the chop case
-        # nets -0.1R, and the break case nets +0.9R.
-        long_tp_conservative = e1
-        short_tp_conservative = e0
+        range_height = r - s
+        if range_height <= 0:
+            return ""
+        mid = (s + r) / 2
+        sl_distance = mid - s
 
-        # Aggressive TPs sit at 2× the range height beyond entry.
-        # R:R ≈ 3.7 — the chop case nets -2R, the break case nets +1R
-        # (winning side pays 2R, losing side pays 1R).
-        range_height = e1 - e0
-        long_tp_aggressive = long_entry + range_height * 2
-        short_tp_aggressive = short_entry - range_height * 2
+        # Adaptive R:R based on range strength. Strong ranges produce
+        # larger breakouts (price has been compressed for longer, so
+        # when it releases the move is bigger). Tight ranges cap at
+        # 1.5 because below that the chop math doesn't break even.
+        range_to_atr = range_height / atr if atr > 0 else 1.0
+        if range_to_atr >= 2.0:
+            base_rr = 2.0
+            range_class = "STRONG"
+            range_note = (f"range is {range_to_atr:.1f}× ATR — expect a "
+                          f"real breakout, target 2.0R")
+        elif range_to_atr >= 1.0:
+            base_rr = 1.5
+            range_class = "NORMAL"
+            range_note = (f"range is {range_to_atr:.1f}× ATR — standard "
+                          f"1.5R target")
+        else:
+            base_rr = 1.5  # hard floor — below 1.5 the math doesn't work
+            range_class = "TIGHT"
+            range_note = (f"range is {range_to_atr:.1f}× ATR — tight, "
+                          f"capped at 1.5R (math floor)")
 
-        # R-multiples
+        # Long and short sides — entry at the range mid, SL at the
+        # opposite edge (no buffer — the edge is the level).
+        long_entry = mid
+        short_entry = mid
+        long_sl = s
+        short_sl = r
+
+        # Conservative TP — the adaptive one. Long TP is above mid by
+        # `base_rr × sl_distance`; short TP is below mid by the same.
+        long_tp_cons = mid + sl_distance * base_rr
+        short_tp_cons = mid - sl_distance * base_rr
+
+        # Aggressive TP — fixed at 2.5× the SL distance, regardless of
+        # range strength. Use this when the user expects a big move.
+        aggressive_rr = 2.5
+        long_tp_agg = mid + sl_distance * aggressive_rr
+        short_tp_agg = mid - sl_distance * aggressive_rr
+
+        # R-multiples (should equal base_rr / aggressive_rr by construction)
         long_risk = long_entry - long_sl
         short_risk = short_sl - short_entry
-        long_rr_cons = (long_tp_conservative - long_entry) / long_risk
-        short_rr_cons = (short_entry - short_tp_conservative) / short_risk
-        long_rr_agg = (long_tp_aggressive - long_entry) / long_risk
-        short_rr_agg = (short_entry - short_tp_aggressive) / short_risk
+        long_rr_cons = (long_tp_cons - long_entry) / long_risk
+        short_rr_cons = (short_entry - short_tp_cons) / short_risk
+        long_rr_agg = (long_tp_agg - long_entry) / long_risk
+        short_rr_agg = (short_entry - short_tp_agg) / short_risk
+
+        ev_cons_per_cycle = base_rr - 1   # 0.5R (normal) or 1.0R (strong)
+        ev_agg_per_cycle = aggressive_rr - 1   # 1.5R
 
         sym = self.symbol
         lines = [
@@ -757,43 +801,51 @@ Key Observation: {self.vision_analysis.get('trend', 'N/A')}
             "stopped out (1R loss); the other runs to TP. No",
             "directional guess required — let the market decide.",
             "",
-            f"Range: {e0:,.2f} – {e1:,.2f}  (height ≈ {range_height:,.2f})",
-            f"Mid entry: {long_entry:,.2f}",
+            f"Range source: {range_source}",
+            f"Range: {s:,.2f} – {r:,.2f}  (height = {range_height:,.2f}, "
+            f"~{range_to_atr:.1f}× ATR — **{range_class}**)",
+            f"Mid entry: {mid:,.2f}",
+            "",
+            f"📐 **Adaptive R:R target**: 1:{base_rr:.1f}  ({range_note})",
             "",
             "📊 **LONG side**",
             f"  Entry: {long_entry:,.2f}",
-            f"  SL:    {long_sl:,.2f}  (below support)",
-            f"  TP-C:  {long_tp_conservative:,.2f}  (1:{long_rr_cons:.1f}  · conservative)",
-            f"  TP-A:  {long_tp_aggressive:,.2f}  (1:{long_rr_agg:.1f}  · aggressive)",
+            f"  SL:    {long_sl:,.2f}  (at support)",
+            f"  TP-C:  {long_tp_cons:,.2f}  (1:{long_rr_cons:.1f}  · "
+            f"adaptive · default)",
+            f"  TP-A:  {long_tp_agg:,.2f}  (1:{long_rr_agg:.1f}  · "
+            f"aggressive · bigger move expected)",
             "",
             "📊 **SHORT side**",
             f"  Entry: {short_entry:,.2f}",
-            f"  SL:    {short_sl:,.2f}  (above resistance)",
-            f"  TP-C:  {short_tp_conservative:,.2f}  (1:{short_rr_cons:.1f}  · conservative)",
-            f"  TP-A:  {short_tp_aggressive:,.2f}  (1:{short_rr_agg:.1f}  · aggressive)",
+            f"  SL:    {short_sl:,.2f}  (at resistance)",
+            f"  TP-C:  {short_tp_cons:,.2f}  (1:{short_rr_cons:.1f}  · "
+            f"adaptive · default)",
+            f"  TP-A:  {short_tp_agg:,.2f}  (1:{short_rr_agg:.1f}  · "
+            f"aggressive · bigger move expected)",
             "",
             "💰 **SIZING** (per side, 0.5% risk · 1% total)",
             f"  Risk: 0.5% per side — 1% total exposure",
             f"  Set your position size so that if {sym} hits the SL,",
             f"  you lose exactly 0.5% of your account balance.",
-            "  Conservative: whichever side hits SL first pays 0.5%,",
-            "  the other side's TP returns ~0.45% (R:R ≈ 0.9) → net",
-            "  ≈ −0.05% per cycle (the cost of the SL buffer).",
-            "  Aggressive: in a chop, both sides hit SL → −1% total.",
-            "  On a real break, one side pays 2R (1% win), the other",
-            "  pays 1R (0.5% loss) → net +0.5% per cycle.",
             "",
             "📌 **MECHANICS**",
-            "  • Conservative: TP at the opposite edge (R:R ≈ 0.9).",
-            "    Either way the market breaks, one side hits TP and",
-            "    the other hits SL → net ≈ 0R. The 0.1·ATR buffer",
-            "    costs ~0.1R per cycle. Use this when the user wants",
-            "    to sit out the chop without losing money.",
-            "  • Aggressive:   TP at 2× the range height (R:R ≈ 3.7).",
-            "    In a chop, both sides hit SL → −2R. On a real break,",
-            "    the winning side pays 2R, the losing side pays 1R →",
-            "    net +1R. Use this when the user expects a real",
-            "    breakout soon and is willing to pay for the chop.",
+            f"  • On a **breakout** (price leaves the range): one",
+            f"    side's SL fires (−1R), the other side's TP fires",
+            f"    (+{base_rr:.1f}R). Net = +{ev_cons_per_cycle:.1f}R per cycle.",
+            f"  • On a **true chop** (price stays in the range):",
+            f"    both sides stay open. No realized P/L; just spread",
+            f"    costs. You sit and wait for the breakout.",
+            f"  • On a **sharp reversal** (break one way then the other",
+            f"    within a short window): both SLs fire → −2R. Rare",
+            f"    but possible — usually after a news spike or",
+            f"    liquidity event.",
+            f"  • **Aggressive** (R:R = {aggressive_rr:.1f}) targets a",
+            f"    bigger move: +{ev_agg_per_cycle:.1f}R per cycle on",
+            f"    breakouts, same −2R on sharp reversals. Use it when",
+            f"    you expect a particularly large breakout (e.g.",
+            f"    after a long consolidation, or before a known",
+            f"    catalyst).",
             "  • Set the position size on each side so the SL",
             "    distance = 0.5% of account balance.",
         ]
@@ -1657,9 +1709,19 @@ if __name__ == '__main__':
     assert 'HEDGED BREAKOUT' in hedge_text, "HEDGE block missing"
     assert 'LONG side' in hedge_text, "LONG side missing"
     assert 'SHORT side' in hedge_text, "SHORT side missing"
-    assert 'Conservative' in hedge_text, "Conservative TP missing"
+    assert 'adaptive' in hedge_text, "Adaptive TP missing"
     assert 'Aggressive' in hedge_text, "Aggressive TP missing"
+    assert 'Adaptive R:R target' in hedge_text, "Adaptive R:R target missing"
     assert '0.5%' in hedge_text, "Risk sizing missing"
+    # Sanity: TP > entry for the LONG side (otherwise the math is wrong)
+    import re
+    long_tp_cons = float(re.search(r'TP-C:\s+([\d,.]+)', hedge_text).group(1).replace(',', ''))
+    long_entry = float(re.search(r'Entry:\s+([\d,.]+)', hedge_text).group(1).replace(',', ''))
+    assert long_tp_cons > long_entry, \
+        f"LONG TP {long_tp_cons} should be > entry {long_entry}"
+    # Range class should be one of the three buckets
+    assert any(c in hedge_text for c in ('STRONG', 'NORMAL', 'TIGHT')), \
+        "Range class label missing"
     full_text = ranging_report.to_telegram_text(tier='premium')
     assert 'HEDGED BREAKOUT' in full_text, \
         "HEDGE block should be in the full premium text on ranging markets"
@@ -1667,5 +1729,5 @@ if __name__ == '__main__':
     trend_text = rich_report.to_telegram_text(tier='premium')
     assert 'HEDGED BREAKOUT' not in trend_text, \
         "HEDGE block should NOT appear in trending (non-ranging) reports"
-    print(f"  HEDGED BREAKOUT renders only on ranging: OK "
-          f"({len(hedge_text)} chars, R:R lines present)")
+    print(f"  HEDGED BREAKOUT adaptive R:R, renders only on ranging: OK "
+          f"({len(hedge_text)} chars, LONG TP={long_tp_cons} > entry={long_entry})")
