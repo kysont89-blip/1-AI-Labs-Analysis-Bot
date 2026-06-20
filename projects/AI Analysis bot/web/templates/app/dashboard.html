@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ brand.name }}{% endblock %}
+
+{% block head_extra %}
+  {# lightweight-charts from CDN. ~120 KB gzipped. Same lib TradingView
+     uses for the chart canvas. Phase 6 will self-host to keep the
+     landing page Lighthouse-clean. #}
+  <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+{% endblock %}
+
+{% block body %}
+{% include "app/_nav.html" %}
+
+<main class="app">
+  <aside class="appnav-side">
+    <a class="appnav-side__item appnav-side__item--active" href="/app">Analyze</a>
+    <a class="appnav-side__item" href="/app/history">History</a>
+    <a class="appnav-side__item" href="/app/settings">Settings</a>
+    <a class="appnav-side__item" href="/verify">Verify</a>
+  </aside>
+
+  <section class="app__main">
+    <header class="app__header">
+      <div class="app__selectors">
+        <label class="field field--inline">
+          <span class="field__label">Symbol</span>
+          <select class="field__input" id="symbolSelect">
+            {% for s in symbols %}
+              <option value="{{ s.id }}"
+                {% if s.id == default_symbol %}selected{% endif %}>
+                {{ s.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field field--inline">
+          <span class="field__label">Timeframe</span>
+          <select class="field__input" id="timeframeSelect">
+            {% for t in timeframes %}
+              <option value="{{ t.id }}"
+                {% if t.id == default_timeframe %}selected{% endif %}>
+                {{ t.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="app__price" id="priceBox">
+        <span class="app__price-value" id="priceValue">—</span>
+        <span class="app__price-meta" id="priceMeta"></span>
+      </div>
+    </header>
+
+    <div class="app__chart-wrap">
+      <div id="chart"></div>
+    </div>
+
+    <div class="app__actions">
+      <button class="btn btn--primary" id="runAnalysisBtn" type="button">
+        Run analysis
+      </button>
+      <span class="app__actions-status" id="runStatus"></span>
+    </div>
+
+    <div class="app__report" id="reportBox">
+      <p class="text-muted">Run an analysis to see the full report here.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+  // ── Chart setup ───────────────────────────────────────────
+  const chart = LightweightCharts.createChart(
+    document.getElementById('chart'),
+    {
+      layout: {
+        background: { type: 'solid', color: '#0A0A0A' },
+        textColor: '#A1A1AA',
+        fontFamily: 'Inter, system-ui, sans-serif',
+      },
+      grid: {
+        vertLines: { color: '#1F1F1F' },
+        horzLines: { color: '#1F1F1F' },
+      },
+      rightPriceScale: { borderColor: '#2A2A2A' },
+      timeScale: { borderColor: '#2A2A2A', timeVisible: true, secondsVisible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    },
+  );
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: '#22C55E',
+    downColor: '#EF4444',
+    borderUpColor: '#22C55E',
+    borderDownColor: '#EF4444',
+    wickUpColor: '#22C55E',
+    wickDownColor: '#EF4444',
+  });
+
+  const emaLineConfigs = [
+    { period: 20,  color: '#60A5FA' },
+    { period: 50,  color: '#FACC15' },
+    { period: 200, color: '#A78BFA' },
+  ];
+  const emaSeries = {};
+  for (const cfg of emaLineConfigs) {
+    emaSeries[cfg.period] = chart.addLineSeries({
+      color: cfg.color,
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+  }
+
+  // Markers for analysis overlay (entry/SL/TP).
+  let activeMarkers = [];
+
+  // ── Data loading ─────────────────────────────────────────
+  const symbolSelect = document.getElementById('symbolSelect');
+  const timeframeSelect = document.getElementById('timeframeSelect');
+  const priceValue = document.getElementById('priceValue');
+  const priceMeta = document.getElementById('priceMeta');
+
+  async function loadChart() {
+    const symbol = symbolSelect.value;
+    const timeframe = timeframeSelect.value;
+    priceValue.textContent = '…';
+    priceMeta.textContent = '';
+
+    const [candlesRes, indRes] = await Promise.all([
+      fetch(`/market/candles?symbol=${symbol}&timeframe=${timeframe}&limit=200`),
+      fetch(`/market/indicators?symbol=${symbol}&timeframe=${timeframe}&limit=200`),
+    ]);
+    if (!candlesRes.ok) {
+      priceValue.textContent = 'err';
+      return;
+    }
+    const c = await candlesRes.json();
+    candleSeries.setData(c.candles);
+    candleSeries.setMarkers([]);
+
+    if (indRes.ok) {
+      const ind = await indRes.json();
+      priceValue.textContent = ind.price.toLocaleString(undefined, {
+        maximumFractionDigits: 2,
+      });
+      priceMeta.textContent =
+        `RSI ${ind.rsi.toFixed(0)} · ADX ${ind.adx.toFixed(0)} · ` +
+        `ATR ${ind.atr.toFixed(2)}`;
+
+      // Plot EMAs (align time axis to candle series)
+      const ts = c.candles.map(k => k.time);
+      for (const cfg of emaLineConfigs) {
+        const series = ind[`ema${cfg.period}`] || [];
+        const data = series
+          .map((v, i) => ({ time: ts[ts.length - series.length + i], value: v }))
+          .filter(p => p.time && Number.isFinite(p.value));
+        emaSeries[cfg.period].setData(data);
+      }
+    }
+    chart.timeScale().fitContent();
+  }
+
+  symbolSelect.addEventListener('change', loadChart);
+  timeframeSelect.addEventListener('change', loadChart);
+
+  // ── Analysis overlay ─────────────────────────────────────
+  const runBtn = document.getElementById('runAnalysisBtn');
+  const runStatus = document.getElementById('runStatus');
+  const reportBox = document.getElementById('reportBox');
+
+  runBtn.addEventListener('click', async () => {
+    runBtn.disabled = true;
+    runStatus.textContent = 'Running…';
+    try {
+      const r = await fetch('/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: symbolSelect.value,
+          timeframe: timeframeSelect.value,
+        }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        reportBox.innerHTML = `<div class="alert alert--error">${t}</div>`;
+        runStatus.textContent = 'Failed';
+        return;
+      }
+      const data = await r.json();
+      runStatus.textContent = 'Done';
+      drawAnalysisOverlay(data);
+      renderReport(data);
+    } catch (e) {
+      reportBox.innerHTML = `<div class="alert alert--error">${e}</div>`;
+      runStatus.textContent = 'Failed';
+    } finally {
+      runBtn.disabled = false;
+    }
+  });
+
+  function drawAnalysisOverlay(data) {
+    const r = data.report || {};
+    const entry = r.entry?.zone;
+    const sl = r.entry?.stop_loss;
+    const tp = r.entry?.take_profit;
+    const signal = r.signal?.strength || 'NEUTRAL';
+
+    const priceLines = [];
+    if (entry) {
+      const mid = (entry[0] + entry[1]) / 2;
+      priceLines.push(candleSeries.createPriceLine({
+        price: mid, color: '#FAFAFA', lineWidth: 1, lineStyle: 2,
+        title: 'Entry',
+      }));
+    }
+    if (sl) {
+      priceLines.push(candleSeries.createPriceLine({
+        price: sl, color: '#EF4444', lineWidth: 1, lineStyle: 2,
+        title: 'SL',
+      }));
+    }
+    if (tp) {
+      priceLines.push(candleSeries.createPriceLine({
+        price: tp, color: '#22C55E', lineWidth: 1, lineStyle: 2,
+        title: 'TP',
+      }));
+    }
+    activeMarkers = priceLines; // keep references so we can remove later
+  }
+
+  function renderReport(data) {
+    const r = data.report || {};
+    const sig = r.signal?.strength || 'NEUTRAL';
+    const conf = r.signal?.confidence || 0;
+    const pill = sig.toLowerCase().includes('buy') ? 'pill--buy'
+               : sig.toLowerCase().includes('sell') ? 'pill--sell'
+               : 'pill--neutral';
+    const entry = r.entry?.zone || [];
+    reportBox.innerHTML = `
+      <header class="report__head">
+        <span class="pill ${pill}">${sig.replace('_', ' ')}</span>
+        <span class="text-muted">${r.symbol} · ${r.timeframe} · ${(conf*100).toFixed(0)}% confidence</span>
+      </header>
+      <dl class="status__details">
+        <dt>Entry</dt><dd>${entry[0]?.toFixed(2) ?? '—'} — ${entry[1]?.toFixed(2) ?? '—'}</dd>
+        <dt>Stop</dt><dd>${r.entry?.stop_loss?.toFixed(2) ?? '—'}</dd>
+        <dt>Target</dt><dd>${r.entry?.take_profit?.toFixed(2) ?? '—'}</dd>
+        <dt>R:R</dt><dd>1 : ${r.entry?.risk_reward?.toFixed(2) ?? '—'}</dd>
+        <dt>Position</dt><dd>${r.entry?.position_size ?? '—'}</dd>
+      </dl>
+      <p class="text-muted">${r.trend?.direction ?? '—'} (${r.trend?.score ?? 0})</p>
+    `;
+  }
+
+  loadChart();
+</script>
+{% endblock %}

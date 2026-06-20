@@ -1,0 +1,10 @@
+<nav class="topnav">
+  <a class="topnav__brand" href="/">
+    <img src="{{ url_for('static', path='/img/1pct-logo-white.png') }}"
+         alt="{{ brand.name }}" class="logo logo--sm">
+  </a>
+  <span class="topnav__email">{{ user.email }}</span>
+  <form method="post" action="/auth/logout" class="topnav__logout">
+    <button class="btn btn--ghost btn--sm" type="submit">Sign out</button>
+  </form>
+</nav>

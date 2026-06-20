@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Verify broker · {{ brand.name }}{% endblock %}
+
+{% block body %}
+{% include "verify/_nav.html" %}
+
+<main class="page page--narrow">
+  <header class="page__header">
+    <h1 class="page__title">Verify your broker</h1>
+    <p class="page__subtitle">
+      Pick your broker, paste your account UID, optionally upload a deposit proof.
+      Admin reviews within 24 hours.
+    </p>
+  </header>
+
+  {% if pending and pending.status == 'pending' %}
+    <div class="alert alert--info" role="status">
+      You have a verification pending review.
+      <a href="/verify/status">View status</a>
+    </div>
+  {% elif pending and pending.status == 'approved' %}
+    <div class="alert alert--ok" role="status">
+      You're verified. <a href="/">Open the dashboard</a>
+    </div>
+  {% else %}
+
+    {% if error %}
+      <div class="alert alert--error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/verify" enctype="multipart/form-data" class="form">
+      <label class="field">
+        <span class="field__label">Broker</span>
+        <select class="field__input" name="broker" required>
+          <option value="shelbymarket" {% if form.broker == 'shelbymarket' %}selected{% endif %}>
+            ShelbyMarket
+          </option>
+          <option value="vantage" {% if form.broker == 'vantage' %}selected{% endif %}>
+            Vantage
+          </option>
+          <option value="binance" {% if form.broker == 'binance' %}selected{% endif %}>
+            Binance
+          </option>
+          <option value="bybit" {% if form.broker == 'bybit' %}selected{% endif %}>
+            Bybit
+          </option>
+          <option value="other" {% if form.broker == 'other' %}selected{% endif %}>
+            Other
+          </option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Broker UID / account id</span>
+        <input class="field__input" type="text" name="broker_uid"
+               value="{{ form.broker_uid }}" required
+               placeholder="e.g. 1093281">
+      </label>
+
+      <label class="field">
+        <span class="field__label">Wallet address (optional)</span>
+        <input class="field__input" type="text" name="wallet_address"
+               value="{{ form.wallet_address }}"
+               placeholder="USDT TRC20 wallet, if applicable">
+      </label>
+
+      <label class="field">
+        <span class="field__label">Deposit amount (USD, optional)</span>
+        <input class="field__input" type="number" name="amount"
+               value="{{ form.amount }}" min="0" step="1"
+               placeholder="100 = tier1, 500 = tier2, 2000 = tier3, 5000 = vip">
+        <span class="field__hint">
+          Used to suggest a tier — admin makes the final call.
+        </span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Deposit proof (optional, image or PDF)</span>
+        <input class="field__input" type="file" name="proof"
+               accept="image/png,image/jpeg,image/webp,application/pdf">
+        <span class="field__hint">Max 5 MB. Shown to admin only.</span>
+      </label>
+
+      <button class="btn btn--primary btn--block" type="submit">
+        Submit for review
+      </button>
+    </form>
+
+  {% endif %}
+</main>
+{% endblock %}

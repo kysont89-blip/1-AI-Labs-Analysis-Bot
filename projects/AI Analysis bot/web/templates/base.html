@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0A0A0A">
+  <title>{% block title %}1% AI Lab{% endblock %}</title>
+
+  <meta name="description" content="{% block description %}AI-powered trading analysis — same engine as the XOX Telegram bot, now in your browser.{% endblock %}">
+
+  {# Phase 6: OG card for Slack / Twitter / Telegram link previews.
+     og.png is the backtest result card, shipped as a static asset. #}
+  <meta property="og:title" content="{% block og_title %}{{ self.title() }}{% endblock %}">
+  <meta property="og:description" content="{% block og_description %}{{ self.description() }}{% endblock %}">
+  <meta property="og:image" content="/static/img/og.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+
+  {# Phase 0 ships without external assets — fonts render via system fallback
+     until Phase 6 wires up Inter from a self-hosted woff2. #}
+  <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  {% block body %}{% endblock %}
+</body>
+</html>

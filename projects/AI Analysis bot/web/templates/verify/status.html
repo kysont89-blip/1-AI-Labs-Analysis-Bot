@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Verification status · {{ brand.name }}{% endblock %}
+
+{% block body %}
+{% include "verify/_nav.html" %}
+
+<main class="page page--narrow">
+  <header class="page__header">
+    <h1 class="page__title">Verification status</h1>
+  </header>
+
+  {% if not pending %}
+    <div class="alert alert--info" role="status">
+      No verification request yet. <a href="/verify">Start one</a>.
+    </div>
+  {% elif pending.status == 'pending' %}
+    <div class="status status--pending">
+      <div class="status__head">
+        <span class="pill pill--neutral">PENDING</span>
+        <h2 class="status__title">Admin review in progress</h2>
+      </div>
+      <dl class="status__details">
+        <dt>Broker</dt><dd>{{ pending.broker }}</dd>
+        <dt>UID</dt><dd>{{ pending.broker_uid }}</dd>
+        {% if pending.wallet_address %}
+          <dt>Wallet</dt><dd>{{ pending.wallet_address }}</dd>
+        {% endif %}
+        <dt>Submitted</dt><dd>{{ pending.requested_at }}</dd>
+      </dl>
+      <p class="status__hint">
+        We email you the moment the review lands.
+      </p>
+    </div>
+  {% elif pending.status == 'approved' %}
+    <div class="status status--approved">
+      <div class="status__head">
+        <span class="pill pill--buy">APPROVED</span>
+        <h2 class="status__title">You're verified.</h2>
+      </div>
+      <dl class="status__details">
+        <dt>Broker</dt><dd>{{ pending.broker }}</dd>
+        <dt>Approved at</dt><dd>{{ pending.verified_at }}</dd>
+      </dl>
+      <a class="btn btn--primary" href="/">Open the dashboard</a>
+    </div>
+  {% elif pending.status == 'rejected' %}
+    <div class="status status--rejected">
+      <div class="status__head">
+        <span class="pill pill--sell">REJECTED</span>
+        <h2 class="status__title">Not approved</h2>
+      </div>
+      <dl class="status__details">
+        <dt>Broker</dt><dd>{{ pending.broker }}</dd>
+        <dt>Reviewed at</dt><dd>{{ pending.verified_at }}</dd>
+      </dl>
+      <a class="btn btn--primary" href="/verify">Try again</a>
+    </div>
+  {% endif %}
+</main>
+{% endblock %}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Admin · pending verifications{% endblock %}
+
+{% block body %}
+{% include "verify/_nav.html" %}
+
+<main class="page">
+  <header class="page__header">
+    <h1 class="page__title">Pending verifications</h1>
+    <p class="page__subtitle">{{ rows|length }} request(s).</p>
+  </header>
+
+  {% if not rows %}
+    <div class="alert alert--info">No pending requests.</div>
+  {% else %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Web user</th>
+          <th>Email</th>
+          <th>Broker</th>
+          <th>UID</th>
+          <th>Wallet</th>
+          <th>Proof</th>
+          <th>Submitted</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+          <tr>
+            <td class="mono">{{ r.user_id }}</td>
+            <td>{{ r.email or '—' }}</td>
+            <td>{{ r.broker }}</td>
+            <td class="mono">{{ r.broker_uid }}</td>
+            <td class="mono">{{ r.wallet_address or '—' }}</td>
+            <td>
+              {% if r.deposit_proof %}
+                <a href="/verify/admin/proof/{{ r.deposit_proof }}"
+                   target="_blank" rel="noopener">view</a>
+              {% else %}—{% endif %}
+            </td>
+            <td class="mono">{{ r.requested_at }}</td>
+            <td>
+              <form method="post"
+                    action="/verify/admin/{{ r.user_id }}/approve"
+                    class="admin__form">
+                <select name="new_tier" class="field__input field__input--xs">
+                  <option value="tier1">tier1</option>
+                  <option value="tier2" selected>tier2</option>
+                  <option value="tier3">tier3</option>
+                  <option value="vip">vip</option>
+                </select>
+                <button class="btn btn--primary btn--xs" type="submit">
+                  Approve
+                </button>
+              </form>
+              <form method="post"
+                    action="/verify/admin/{{ r.user_id }}/reject"
+                    class="admin__form">
+                <button class="btn btn--ghost btn--xs" type="submit">
+                  Reject
+                </button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</main>
+{% endblock %}

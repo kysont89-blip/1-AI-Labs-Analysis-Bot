@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}History · {{ brand.name }}{% endblock %}
+
+{% block body %}
+{% include "app/_nav.html" %}
+
+<main class="app">
+  <aside class="appnav-side">
+    <a class="appnav-side__item" href="/app">Analyze</a>
+    <a class="appnav-side__item appnav-side__item--active" href="/app/history">History</a>
+    <a class="appnav-side__item" href="/app/settings">Settings</a>
+    <a class="appnav-side__item" href="/verify">Verify</a>
+  </aside>
+
+  <section class="app__main">
+    <header class="app__header">
+      <h1 class="page__title">Recent analyses</h1>
+    </header>
+    <p class="text-muted">
+      History is populated as you run analyses. Phase 5 wires the signal
+      tracking so resolved signals show their P&amp;L here.
+    </p>
+  </section>
+</main>
+{% endblock %}

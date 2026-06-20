@@ -1,0 +1,36 @@
+# 1% AI Lab — Render deploy config
+#
+# Phase 5 ships the web dashboard to Render (Free tier Web Service,
+# Singapore region, same as Neon). The Telegram bot stays on the local
+# workstation; only the FastAPI app in `web/` runs on Render.
+#
+# Required env vars (set in Render dashboard, never commit):
+#   DATABASE_URL     — Neon Postgres connection string
+#   SESSION_SECRET   — 64+ byte random string for cookie signing
+#   ADMIN_EMAIL      — the email of the user who can approve /verify
+#   OLLAMA_BASE_URL  — ngrok URL for the local Ollama (Phase 5)
+#   RESEND_API_KEY   — for password reset emails
+
+services:
+  - type: web
+    name: onepercent-ai-lab
+    runtime: python
+    plan: free
+    region: singapore
+    branch: master
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: uvicorn web.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: OLLAMA_BASE_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false

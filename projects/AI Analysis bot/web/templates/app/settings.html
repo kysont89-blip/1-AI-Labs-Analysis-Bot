@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ brand.name }}{% endblock %}
+
+{% block body %}
+{% include "app/_nav.html" %}
+
+<main class="app">
+  <aside class="appnav-side">
+    <a class="appnav-side__item" href="/app">Analyze</a>
+    <a class="appnav-side__item" href="/app/history">History</a>
+    <a class="appnav-side__item appnav-side__item--active" href="/app/settings">Settings</a>
+    <a class="appnav-side__item" href="/verify">Verify</a>
+  </aside>
+
+  <section class="app__main">
+    <header class="app__header">
+      <h1 class="page__title">Trading settings</h1>
+    </header>
+
+    {% if saved %}
+      <div class="alert alert--ok" role="status">Saved. These apply to your next analysis — both here and in Telegram.</div>
+    {% endif %}
+    {% if error %}
+      <div class="alert alert--error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/app/settings" class="form form--wide">
+      <div class="form__row">
+        <label class="field">
+          <span class="field__label">Account balance (USD)</span>
+          <input class="field__input" type="number" name="account_balance"
+                 value="{{ u.account_balance }}" min="1" step="0.01" required>
+        </label>
+        <label class="field">
+          <span class="field__label">Risk per trade (%)</span>
+          <input class="field__input" type="number" name="risk_percent"
+                 value="{{ u.risk_percent }}" min="0.01" max="10" step="0.01" required>
+          <span class="field__hint">Recommended 1-2%.</span>
+        </label>
+      </div>
+
+      <div class="form__row">
+        <label class="field">
+          <span class="field__label">Leverage (general)</span>
+          <input class="field__input" type="number" name="leverage"
+                 value="{{ u.leverage }}" min="1" step="0.1" required>
+        </label>
+        <label class="field">
+          <span class="field__label">Leverage (crypto)</span>
+          <input class="field__input" type="number" name="leverage_crypto"
+                 value="{{ u.leverage_crypto }}" min="1" step="0.1" required>
+        </label>
+        <label class="field">
+          <span class="field__label">Leverage (MT5)</span>
+          <input class="field__input" type="number" name="leverage_mt5"
+                 value="{{ u.leverage_mt5 }}" min="1" step="0.1" required>
+        </label>
+      </div>
+
+      <div class="form__row">
+        <label class="field">
+          <span class="field__label">Default timeframe</span>
+          <select class="field__input" name="default_timeframe" required>
+            {% for tf in timeframes %}
+              <option value="{{ tf }}"
+                {% if u.default_timeframe == tf %}selected{% endif %}>{{ tf }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field">
+          <span class="field__label">Trading style</span>
+          <select class="field__input" name="trading_style" required>
+            {% for s in styles %}
+              <option value="{{ s }}"
+                {% if u.trading_style == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <button class="btn btn--primary" type="submit">Save settings</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

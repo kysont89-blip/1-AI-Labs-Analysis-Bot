@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Welcome · {{ brand.name }}{% endblock %}
+
+{% block body %}
+<main class="auth">
+  <a class="auth__brand" href="/">
+    <img src="{{ url_for('static', path='/img/1pct-logo-white.png') }}"
+         alt="{{ brand.name }}" class="logo logo--md">
+  </a>
+
+  <section class="auth__card">
+    <h1 class="auth__title">You're in.</h1>
+    <p class="auth__subtitle">
+      Signed in as <strong>{{ user.email }}</strong>.
+      Next, link your broker so we can verify your tier.
+    </p>
+
+    <div class="auth__actions">
+      <a class="btn btn--primary" href="/verify">Verify your broker</a>
+      <a class="btn btn--ghost" href="/">Skip for now</a>
+    </div>
+
+    <form method="post" action="/auth/logout" class="auth__logout">
+      <button class="btn btn--ghost btn--block" type="submit">
+        Sign out
+      </button>
+    </form>
+  </section>
+</main>
+{% endblock %}

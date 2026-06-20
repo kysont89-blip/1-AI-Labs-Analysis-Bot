@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Privacy · {{ brand.name }}{% endblock %}
+{% block body %}
+{% include "_topnav_public.html" %}
+<main class="legal">
+  <h1>Privacy Policy</h1>
+  <p class="text-muted">Last updated: 2026-06-17</p>
+
+  <h2>What we collect</h2>
+  <p>When you create an account, we store your email address and a
+    cryptographic hash of your password. When you use the analysis
+    features, we store the symbol, timeframe, and timestamp of each
+    analysis request so we can render your history page.</p>
+
+  <h2>What we don't collect</h2>
+  <p>We do not sell your data. We do not run third-party tracking
+    pixels. We do not log your IP address beyond what's needed to keep
+    the service secure.</p>
+
+  <h2>How we protect your data</h2>
+  <p>Passwords are hashed with bcrypt before storage. Session cookies
+    are signed with a server-side secret and transmitted only over
+    HTTPS in production. The database is hosted on Neon (serverless
+    Postgres in Singapore).</p>
+
+  <h2>Your rights</h2>
+  <p>You can delete your account at any time. Email
+    <a href="mailto:privacy@1percentailab.com">privacy@1percentailab.com</a>
+    and we'll remove your row within 30 days.</p>
+
+  <p><a href="/">← Back to home</a></p>
+</main>
+{% endblock %}

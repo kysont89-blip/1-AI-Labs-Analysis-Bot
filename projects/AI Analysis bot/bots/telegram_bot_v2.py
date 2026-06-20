@@ -103,7 +103,7 @@ session_analyzer = None  # Created per-analysis
 divergence_detector = None  # Created per-analysis
 # position_sizer now created per-analysis in run_analysis_direct
 
-STEP_PAIR, STEP_TIMEFRAME, STEP_TYPE, STEP_CONFIRM, STEP_SETTINGS = range(5)
+STEP_PAIR, STEP_TIMEFRAME, STEP_TYPE, STEP_SETTINGS = range(4)
 STEP_VERIFY_WALLET, STEP_VERIFY_PHOTO = range(5, 7)
 user_sessions: Dict[int, Dict] = {}
 user_recent_pairs: Dict[int, List[str]] = {}
@@ -184,18 +184,6 @@ def get_report_type_keyboard():
         [InlineKeyboardButton("📊 Full Report (Recommended)", callback_data='report_full')],
         [InlineKeyboardButton("📱 Simple Report", callback_data='report_simple')],
         [InlineKeyboardButton("⬅️ Back", callback_data='back_timeframe')]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_confirm_keyboard(symbol: str, tf: str, report_type: str):
-    type_names = {
-        'report_full': '📊 Full Report',
-        'report_simple': '📱 Simple Report',
-    }
-    keyboard = [
-        [InlineKeyboardButton(f"🚀 Run {type_names.get(report_type, report_type)}", callback_data='run_analysis')],
-        [InlineKeyboardButton("⬅️ Back", callback_data='back_type')]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -1193,6 +1181,199 @@ Structure: {structure_label}
 # TRADING PLAN BUILDER
 # ═══════════════════════════════════════════════
 
+def _derive_neutral_lean(report) -> tuple:
+    """Return (direction_label, has_real_levels) for a NEUTRAL report.
+
+    Direction comes from the geometry of the entry/SL pair (which was
+    computed BEFORE the contradiction downgrade in report_builder.build —
+    see report_builder.py:1362-1371). SL above the entry midpoint means
+    the code intended a SHORT; SL below means LONG. If the SL/entry are
+    essentially at the same price (ranging market, no real lean), we fall
+    back to the sign of trend_score, then to NONE.
+
+    Returns:
+        ('SHORT' | 'LONG' | 'NONE', has_real_levels: bool)
+    """
+    entry_mid = (report.entry_zone[0] + report.entry_zone[1]) / 2
+    sl_distance = abs(report.stop_loss - entry_mid)
+    # < 5 ticks of movement → no real directional setup was generated
+    has_real_levels = sl_distance > 0.0001
+
+    if not has_real_levels:
+        # True ranging — no directional levels, HEDGED BREAKOUT handles it.
+        return ('NONE', False)
+
+    if report.stop_loss > entry_mid:
+        return ('SHORT', True)
+    if report.stop_loss < entry_mid:
+        return ('LONG', True)
+
+    # Geometric tie — fall back to trend score sign.
+    if report.trend_score > 0:
+        return ('LONG', True)
+    if report.trend_score < 0:
+        return ('SHORT', True)
+    return ('NONE', False)
+
+
+def _detect_neutral_cause(report) -> tuple:
+    """Return (cause_key, why_line, action_line) for a NEUTRAL signal.
+
+    Three mutually-exclusive causes, in priority order:
+        1. 'event'    — a high-impact economic event forced the override
+                        (report.news_impact is populated by report_builder
+                        when event_blocked['impact'] == 'high')
+        2. 'contradiction' — contradictions killed the directional signal
+                        (report.risk_warning is populated by report_builder
+                        when _check_contradictions() found ≥1 conflict)
+        3. 'weak'     — neither; pure weak-trend / ranging noise
+    """
+    # 1. Event-block — message already starts with "Auto-blocked: …"
+    news_impact = getattr(report, 'news_impact', None)
+    if news_impact:
+        # news_impact looks like "Auto-blocked: FOMC … in 12 min (high-impact …)"
+        # Surface it verbatim — the builder already worded it.
+        why = f"🚫 {news_impact}"
+        # Try to name the event for the action line.
+        event_name = news_impact.split(':', 1)[-1].split(' in ')[0].split(' released ')[0].strip()
+        action = f"⏳ Wait for **{event_name}** to pass, then re-run /analyze."
+        return ('event', why, action)
+
+    # 2. Contradictions — risk_warning is "⚠️ Contradictions detected: A; B; C"
+    risk_warning = getattr(report, 'risk_warning', None)
+    if risk_warning:
+        # Strip the leading "⚠️ Contradictions detected: " for a cleaner line.
+        items = risk_warning.replace('⚠️ Contradictions detected: ', '').split(';')
+        items = [it.strip() for it in items if it.strip()]
+        n = len(items)
+        top = items[0] if items else 'conflicting signals'
+        # Pluralize naturally.
+        plural = 'contradiction' if n == 1 else 'contradictions'
+        why = f"⚠️ {n} {plural}: {top}"
+        if n > 1:
+            why += f" (and {n - 1} more — see ⚠️ RISK CONSIDERATIONS above)"
+        action = ("⏳ Wait for contradictions to clear, OR take the "
+                  "exploratory 0.5% size below.")
+        return ('contradiction', why, action)
+
+    # 3. Weak trend — no contradictions, no event. Pure noise.
+    score = getattr(report, 'trend_score', 0)
+    why = f"📉 Weak trend — score {score:+.0f}/100, no clear direction."
+    action = "⏳ Wait for a clearer setup, then re-run /analyze."
+    return ('weak', why, action)
+
+
+def _build_neutral_plan(report, sizing) -> str:
+    """Build a useful NEUTRAL trading plan.
+
+    The signal was forced to NEUTRAL by one of:
+        - high-impact event auto-block (most common)
+        - contradictions cancelling a directional setup
+        - pure weak trend / ranging noise
+
+    Either way, the code already computed a real entry/SL/TP (for
+    non-ranging markets). We surface those levels plus a half-size
+    exploratory position (0.5% risk vs. the user's normal 2%) so the
+    user has something actionable instead of a blank "wait" stub.
+
+    For true ranging markets (no real levels) we tell the user to see
+    🚦 HEDGED BREAKOUT above — that's the range play they should use.
+    """
+    cause_key, why_line, action_line = _detect_neutral_cause(report)
+    lean, has_real_levels = _derive_neutral_lean(report)
+
+    lean_text = {
+        'SHORT': 'SHORT bias (technicals bearish)',
+        'LONG':  'LONG bias (technicals bullish)',
+        'NONE':  'no clear bias (ranging)',
+    }.get(lean, 'no clear bias')
+
+    # Header — always the same shape so the user knows it's the plan block.
+    text = f"""📋 **TRADING PLAN** (NEUTRAL)
+━━━━━━━━━━━━━━━━━━━━━━
+⚪ Signal: NEUTRAL — directional setup below the confidence floor.
+
+🔍 **WHY NO TRADE**
+━━━━━━━━━━━━━━━━━━━━━━
+• {why_line}
+"""
+
+    # Code-generated levels — only when the code actually produced levels.
+    # True ranging markets (no real levels) → defer to HEDGED BREAKOUT.
+    if has_real_levels:
+        e0 = report.entry_zone[0]
+        e1 = report.entry_zone[1]
+        sl = report.stop_loss
+        tp = report.take_profit
+        rr = report.risk_reward
+        text += f"""
+📐 **CODE-GENERATED SETUP** (technical lean: {lean_text})
+━━━━━━━━━━━━━━━━━━━━━━
+• Entry Zone: {e0:,.2f} – {e1:,.2f}
+• Stop Loss:  {sl:,.2f}
+• Take Profit: {tp:,.2f}
+• R:R ≈ 1:{rr:.1f}
+"""
+    else:
+        # True ranging — point at the HEDGED BREAKOUT block from the
+        # premium report. Don't restate levels; the hedge already shows
+        # long + short entries, SL, and TP-C/TP-A for both sides.
+        text += """
+📐 **RANGING MARKET**
+━━━━━━━━━━━━━━━━━━━━━━
+• No directional setup. See 🚦 HEDGED BREAKOUT above
+  for the long + short range play (one side's TP covers
+  the other side's SL — net positive on a clean breakout).
+"""
+
+    # Exploratory sizing — only show if we have a usable sizing object.
+    # Skip for true ranging (no direction to size against).
+    if has_real_levels and sizing and getattr(sizing, 'is_valid', False):
+        # Scale 2% risk → 0.5% risk: multiply by 0.25.
+        # We reuse the already-computed sizing object's units/margin;
+        # that guarantees the displayed numbers match what /analyze
+        # produced at full size.
+        scale = 0.25
+        exp_risk = sizing.risk_amount * scale
+        exp_units = sizing.units * scale
+        exp_margin = sizing.margin_required * scale
+
+        # Asset suffix for crypto pairs (BTCUSDT → BTC, etc.).
+        # FX/Gold show lots directly.
+        sym = report.symbol
+        if sym.endswith('USDT'):
+            asset = sym.replace('USDT', '')
+            units_str = f"{exp_units:.4f} {asset}"
+        else:
+            units_str = f"{exp_units:.2f} lots"
+
+        text += f"""
+💰 **EXPLORATORY SIZE** (if you take it anyway)
+━━━━━━━━━━━━━━━━━━━━━━
+• Half-size (0.5% risk): {units_str} — ${exp_margin:,.0f} margin
+• Full-size (2% risk, NOT recommended): 4× the above
+
+💡 **ACTION**
+━━━━━━━━━━━━━━━━━━━━━━
+• {action_line}
+• Re-run /analyze in 15–30 min for a fresh read
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+    else:
+        text += f"""
+💡 **ACTION**
+━━━━━━━━━━━━━━━━━━━━━━
+• {action_line}
+• Re-run /analyze in 15–30 min for a fresh read
+
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+    text += DISCLAIMER_SHORT + "\n"
+    return text
+
+
 def build_trading_plan(report, sizing, user_id: int) -> str:
     """Build actionable trading plan for the user.
 
@@ -1204,20 +1385,7 @@ def build_trading_plan(report, sizing, user_id: int) -> str:
     direction = "LONG" if signal in ('STRONG_BUY', 'BUY') else "SHORT" if signal in ('STRONG_SELL', 'SELL') else "NEUTRAL"
 
     if direction == "NEUTRAL":
-        return """📋 **TRADING PLAN**
-━━━━━━━━━━━━━━━━━━━━━━
-
-⚪ Signal: NEUTRAL
-
-No trade recommended at this time.
-
-💡 ACTION:
-• Wait for price to reach support/resistance
-• Re-analyze when trend becomes clearer
-• Consider reducing position size if trading anyway
-
-━━━━━━━━━━━━━━━━━━━━━━
-"""
+        return _build_neutral_plan(report, sizing)
 
     entry_zone = f"{report.entry_zone[0]:,.2f} - {report.entry_zone[1]:,.2f}"
     sl = report.stop_loss
@@ -1458,28 +1626,10 @@ async def handle_analysis_type(update: Update, context: ContextTypes.DEFAULT_TYP
     analysis_type = data.replace('type_', '')
     user_sessions[user.id]['analysis_type'] = analysis_type
 
-    symbol = user_sessions[user.id]['symbol']
-    tf = user_sessions[user.id]['timeframe']
-    display_symbol = symbol.replace('USDT', '/USDT').replace('USD', '/USD')
-
-    type_names = {
-        'report_full': '📊 Full Report',
-        'report_simple': '📱 Simple Report',
-    }
-
-    text = f"""📋 **Analysis Summary**
-━━━━━━━━━━━━━━━━━━━━━━
-
-Pair: **{display_symbol}**
-Timeframe: **{tf}**
-Report: **{type_names.get(analysis_type, analysis_type)}**
-
-Ready to run analysis?
-
-Click **Run Analysis** below 👇
-"""
-    await query.edit_message_text(text, reply_markup=get_confirm_keyboard(symbol, tf, analysis_type))
-    return STEP_CONFIRM
+    # Skip confirmation step — go straight to running the report.
+    # "back_timeframe" handler above (returns STEP_TIMEFRAME) keeps the
+    # ability to go back and pick a different timeframe.
+    return await run_analysis(update, context)
 
 
 async def run_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2942,10 +3092,6 @@ def main():
             STEP_PAIR: [CallbackQueryHandler(handle_pair, pattern='^pair_|back_start$')],
             STEP_TIMEFRAME: [CallbackQueryHandler(handle_timeframe, pattern='^tf_|back_pair$')],
             STEP_TYPE: [CallbackQueryHandler(handle_analysis_type, pattern='^report_|back_timeframe$')],
-            STEP_CONFIRM: [
-                CallbackQueryHandler(run_analysis, pattern='^run_analysis$'),
-                CallbackQueryHandler(handle_analysis_type, pattern='^back_type$')
-            ],
             STEP_SETTINGS: [
                 CallbackQueryHandler(handle_settings, pattern='^set_|^lev_|^risk_|back_settings$'),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text)

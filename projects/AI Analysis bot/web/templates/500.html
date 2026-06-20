@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Server error · {{ brand.name }}{% endblock %}
+{% block body %}
+{% include "_topnav_public.html" %}
+<main class="error">
+  <div class="error__code">500</div>
+  <h1 class="error__title">Something went wrong</h1>
+  <p class="error__detail">We're looking into it. Try again in a moment.</p>
+  <a class="btn btn--primary" href="/">Back to home</a>
+</main>
+{% endblock %}

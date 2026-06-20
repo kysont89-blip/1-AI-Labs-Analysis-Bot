@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}1% AI Lab — Trading analysis, in your browser{% endblock %}
+
+{% block description %}Same engine as the XOX Telegram bot. TradingView-style charts, a real dashboard, professional surface.{% endblock %}
+
+{% block body %}
+<main class="landing">
+  {# ── Top nav ─────────────────────────────────────────── #}
+  <header class="landing__nav">
+    <div class="container">
+      <div class="landing__nav-inner">
+        <span class="logo" aria-label="1% AI Lab">
+          <span class="logo__top">1%</span>
+          <span class="logo__bottom">AI Lab</span>
+        </span>
+        <nav aria-label="Account">
+          {% if user %}
+            <a class="btn" href="/">Open dashboard</a>
+          {% else %}
+            <a class="btn" href="/auth/login">Sign in</a>
+          {% endif %}
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  {# ── Hero ────────────────────────────────────────────── #}
+  <section class="landing__hero">
+    <div class="container">
+      <div class="landing__hero-grid">
+        <div class="landing__copy">
+          <span class="text-eyebrow">v0.1 · private beta</span>
+          <h1 class="landing__title">
+            Trade with <em>conviction</em>, not guesswork.
+          </h1>
+          <p class="landing__lede">
+            {{ brand.subtitle }}
+            Real entries, stops, targets, and position sizing — surfaced
+            on TradingView-grade charts, with the same signals the
+            XOX Telegram bot already sends.
+          </p>
+          <div class="landing__cta">
+            {% if user %}
+              <a class="btn btn--primary btn--lg" href="/">Open dashboard</a>
+              <form method="post" action="/auth/logout" style="display:inline">
+                <button class="btn btn--lg" type="submit">Sign out</button>
+              </form>
+            {% else %}
+              <a class="btn btn--primary btn--lg" href="/auth/register">
+                Create account
+              </a>
+              <a class="btn btn--lg" href="/auth/login">Sign in</a>
+            {% endif %}
+          </div>
+        </div>
+
+        {# ── Visual: schematic of the analysis card ───── #}
+        <div class="landing__visual" aria-hidden="true">
+          <div class="landing__visual-grid"></div>
+
+          <div class="landing__visual-card landing__visual-card--main">
+            <div class="landing__visual-row">
+              <span class="text-muted">BTCUSDT · H1</span>
+              <span class="pill pill--sell pill--strong">Strong Sell</span>
+            </div>
+            <div class="landing__visual-row">
+              <span class="text-muted">Entry</span>
+              <span class="text-mono">65,696.50</span>
+            </div>
+            <div class="landing__visual-row">
+              <span class="text-muted">Stop</span>
+              <span class="text-mono">66,606.00</span>
+            </div>
+            <div class="landing__visual-row">
+              <span class="text-muted">Target</span>
+              <span class="text-mono">64,059.00</span>
+            </div>
+            <div class="landing__visual-row">
+              <span class="text-muted">R:R</span>
+              <span class="text-mono">1 : 1.8</span>
+            </div>
+          </div>
+
+          <div class="landing__visual-card landing__visual-card--side">
+            <div class="landing__visual-row">
+              <span class="text-muted">Position</span>
+              <span class="text-mono">0.024 BTC</span>
+            </div>
+            <div class="landing__visual-row">
+              <span class="text-muted">Risk</span>
+              <span class="text-mono">$200.00</span>
+            </div>
+            <div class="landing__visual-row">
+              <span class="text-muted">Margin</span>
+              <span class="text-mono">$78.40</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# ── Features ────────────────────────────────────────── #}
+  <section class="landing__features">
+    <div class="container">
+      <div class="landing__features-grid">
+        <article class="feature">
+          <div class="feature__icon">▦</div>
+          <h3 class="feature__title">TradingView charts</h3>
+          <p class="feature__body">
+            Real candles, real markers. Entry, stop, and target
+            drawn straight on the chart so you can see the
+            setup, not just read numbers.
+          </p>
+        </article>
+        <article class="feature">
+          <div class="feature__icon">◇</div>
+          <h3 class="feature__title">XOX verification</h3>
+          <p class="feature__body">
+            Register, submit your broker UID, get verified.
+            The same tier system Telegram users already know —
+            now with a web form and a real admin queue.
+          </p>
+        </article>
+        <article class="feature">
+          <div class="feature__icon">⌖</div>
+          <h3 class="feature__title">Position sizing</h3>
+          <p class="feature__body">
+            Instrument-native math for crypto, gold, and FX.
+            Same numbers the bot already calculates, mirrored
+            on the web so your risk stays consistent.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  {# ── Footer ─────────────────────────────────────────── #}
+  <footer class="landing__footer">
+    <div class="container">
+      <div class="landing__footer-inner">
+        <span>© 1% AI Lab</span>
+        <span class="text-subtle">
+          Not financial advice. For educational use only.
+        </span>
+      </div>
+    </div>
+  </footer>
+</main>
+{% endblock %}

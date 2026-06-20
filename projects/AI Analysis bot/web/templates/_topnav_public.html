@@ -1,0 +1,10 @@
+{# Public pages (no app context). Logo on the left, optional links right. #}
+<nav class="topnav">
+  <div class="topnav__inner">
+    <a class="topnav__brand" href="/">1% <span>AI Lab</span></a>
+    <div class="topnav__links">
+      {% block nav_extra %}{% endblock %}
+      <a href="/auth/login">Sign in</a>
+    </div>
+  </div>
+</nav>

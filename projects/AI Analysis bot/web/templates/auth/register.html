@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Create account · {{ brand.name }}{% endblock %}
+
+{% block body %}
+<main class="auth">
+  <a class="auth__brand" href="/">
+    <img src="{{ url_for('static', path='/img/1pct-logo-white.png') }}"
+         alt="{{ brand.name }}" class="logo logo--md">
+  </a>
+
+  <section class="auth__card">
+    <h1 class="auth__title">Create your account</h1>
+    <p class="auth__subtitle">
+      Trade with conviction. The same engine as the XOX Telegram bot,
+      now in your browser.
+    </p>
+
+    {% if error %}
+      <div class="alert alert--error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/auth/register" class="form">
+      <label class="field">
+        <span class="field__label">Email</span>
+        <input class="field__input" type="email" name="email"
+               value="{{ form.email }}" required autocomplete="email">
+      </label>
+
+      <label class="field">
+        <span class="field__label">Password</span>
+        <input class="field__input" type="password" name="password"
+               required minlength="8" autocomplete="new-password">
+        <span class="field__hint">At least 8 characters.</span>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Confirm password</span>
+        <input class="field__input" type="password" name="password_confirm"
+               required minlength="8" autocomplete="new-password">
+      </label>
+
+      <button class="btn btn--primary btn--block" type="submit">
+        Create account
+      </button>
+    </form>
+
+    <p class="auth__alt">
+      Already have one?
+      <a href="/auth/login">Sign in</a>
+    </p>
+  </section>
+
+  <p class="auth__footer">
+    Not financial advice. Trading carries risk. Do your own research.
+  </p>
+</main>
+{% endblock %}
